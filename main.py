@@ -1,30 +1,43 @@
-from ipaddress import IPv4Address, ip_address
+from ipaddress import IPv4Address
+from subprocess import run
 
-import scapy.all as scapy
 from scapy.arch.windows import get_windows_if_list
+from scapy.interfaces import NetworkInterface, dev_from_index
 
 from GUI import GUI
 from controller import Controller
 from router import Router
 
 
-def discover_interfaces():
-    devices = []
-    os_ipv4 = set()
+def discover_interfaces() -> tuple[list[NetworkInterface], set[IPv4Address]]:
+    devices: list[NetworkInterface] = []
+    os_ipv4: set[IPv4Address] = set()
+    result = run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-NetAdapter -Physical | Select-Object -ExpandProperty ifIndex",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    physical_indices = {int(value) for value in result.stdout.split()}
 
     for adapter in get_windows_if_list():
         for value in adapter.get("ips", []):
             try:
-                address = ip_address(value)
+                address = IPv4Address(value)
             except ValueError:
                 continue
-            if isinstance(address, IPv4Address):
-                os_ipv4.add(address)
+            os_ipv4.add(address)
 
-        if adapter.get("type") != 6:
+        if adapter.get("type") != 6 or adapter.get("index") not in physical_indices:
             continue
         try:
-            device = scapy.dev_from_index(adapter["index"])
+            device = dev_from_index(adapter["index"])
         except (KeyError, ValueError, OSError):
             continue
         if "WIRELESS" in device.flags or not device.mac:
@@ -34,11 +47,15 @@ def discover_interfaces():
     return devices, os_ipv4
 
 
-def main():
+def main() -> None:
     devices, os_ipv4 = discover_interfaces()
     router = Router(devices)
     controller = Controller(router, os_ipv4)
-    GUI(controller).show()
+    router.start()
+    try:
+        GUI(controller).show()
+    finally:
+        router.stop()
 
 
 if __name__ == "__main__":
