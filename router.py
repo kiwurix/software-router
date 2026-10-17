@@ -50,6 +50,8 @@ class Router:
             store=False,
         )
         self._sniffer.start()
+        with self._lock:
+            self.rip.send_request(self._ports)
         self._timers_running = True
         self._timer_thread = Thread(target=self._run_timers, daemon=True)
         self._timer_thread.start()
@@ -207,6 +209,7 @@ class Router:
             expired = self.arp.update_timers()
             for key in expired:
                 self._pending_packets.pop(key, None)
+            self.rip.update_timers()
 
     def get_arp_table(self) -> list[tuple[int, IPv4Address, str, int]]:
         return self.arp.get_table()

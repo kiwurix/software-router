@@ -193,6 +193,12 @@ class RIP:
                 ))
         return advertisement_data
 
+    def send_request(self, ports: list[RouterPort]) -> None:
+        entries = [RIPMessageEntry(AF=0, metric=16)]
+        for port in ports:
+            if port.rip_enabled and port.ipv4 is not None:
+                self._send_frame(self._build_frame(port, entries, command=1), port.device)
+
     def send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
                       reply_to: Packet | None = None) -> bool:
         frames = []
@@ -210,22 +216,23 @@ class RIP:
                     nextHop="0.0.0.0", metric=min(advertisement.metric + 1, 16),
                 ))
                 if len(entries) == 25:
-                    frames.append((self._build_response_frame(port, entries, reply_to), port.device))
+                    frames.append((self._build_frame(port, entries, command=2, reply_to=reply_to), port.device))
                     entries.clear()
 
             if entries:
-                frames.append((self._build_response_frame(port, entries, reply_to), port.device))
+                frames.append((self._build_frame(port, entries, command=2, reply_to=reply_to), port.device))
 
         return all([self._send_frame(frame, device) for frame, device in frames])
 
     @staticmethod
-    def _build_response_frame(port: RouterPort, entries: list[RIPMessageEntry], reply_to: Packet | None) -> Packet:
+    def _build_frame(port: RouterPort, entries: list[RIPMessageEntry], command: int,
+                     reply_to: Packet | None = None) -> Packet:
         if reply_to is None:
             dst_mac, dst_ip, dst_port = "01:00:5e:00:00:09", "224.0.0.9", 520
         else:
             dst_mac, dst_ip, dst_port = reply_to[Ether].src, reply_to[IP].src, reply_to[UDP].sport
 
-        message = RIPMessage(cmd=2, version=2)
+        message = RIPMessage(cmd=command, version=2)
         for entry in entries:
             message /= entry
         return (
