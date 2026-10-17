@@ -9,4 +9,5 @@ class RouterPort:
     index: int
     device: NetworkInterface
     mac: str
-    interface: IPv4Interface | None = None
+    ipv4: IPv4Interface | None = None
+    rip_enabled: bool = False

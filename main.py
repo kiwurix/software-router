@@ -9,9 +9,9 @@ from controller import Controller
 from router import Router
 
 
-def discover_interfaces() -> tuple[list[NetworkInterface], set[IPv4Address]]:
+def discover_devices() -> tuple[list[NetworkInterface], set[IPv4Address]]:
     devices: list[NetworkInterface] = []
-    os_ipv4: set[IPv4Address] = set()
+    os_ipv4_addresses: set[IPv4Address] = set()
     result = run(
         [
             "powershell.exe",
@@ -24,7 +24,7 @@ def discover_interfaces() -> tuple[list[NetworkInterface], set[IPv4Address]]:
         text=True,
         check=True,
     )
-    physical_indices = {int(value) for value in result.stdout.split()}
+    physical_adapter_indices = {int(value) for value in result.stdout.split()}
 
     for adapter in get_windows_if_list():
         for value in adapter.get("ips", []):
@@ -32,25 +32,26 @@ def discover_interfaces() -> tuple[list[NetworkInterface], set[IPv4Address]]:
                 address = IPv4Address(value)
             except ValueError:
                 continue
-            os_ipv4.add(address)
+            os_ipv4_addresses.add(address)
 
-        if adapter.get("type") != 6 or adapter.get("index") not in physical_indices:
+        if adapter.get("type") != 6 or adapter.get("index") not in physical_adapter_indices:
             continue
         try:
-            device = dev_from_index(adapter["index"])
+            adapter_index = adapter["index"]
+            device = dev_from_index(adapter_index)
         except (KeyError, ValueError, OSError):
             continue
         if "WIRELESS" in device.flags or not device.mac:
             continue
         devices.append(device)
 
-    return devices, os_ipv4
+    return devices, os_ipv4_addresses
 
 
 def main() -> None:
-    devices, os_ipv4 = discover_interfaces()
+    devices, os_ipv4_addresses = discover_devices()
     router = Router(devices)
-    controller = Controller(router, os_ipv4)
+    controller = Controller(router, os_ipv4_addresses)
     router.start()
     try:
         GUI(controller).show()

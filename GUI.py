@@ -114,7 +114,7 @@ class GUI:
         port_idx = self._selected_port_idx()
         if port_idx is None:
             return
-        configured = self.controller.ports[port_idx].interface
+        configured = self.controller.ports[port_idx].ipv4
         self.address.set(str(configured.ip) if configured else "")
         self.mask.set(str(configured.network.netmask) if configured else "")
 
@@ -127,8 +127,8 @@ class GUI:
                 port_idx,
                 port.device.name,
                 port.mac,
-                str(port.interface.ip) if port.interface else "",
-                str(port.interface.network.netmask) if port.interface else "",
+                str(port.ipv4.ip) if port.ipv4 else "",
+                str(port.ipv4.network.netmask) if port.ipv4 else "",
             ))
         if selected is not None:
             self.table.selection_set(str(selected))
@@ -158,7 +158,6 @@ class GUI:
         self._refresh()
 
     def _tick(self) -> None:
-        self.controller.update_timers()
         self._refresh_arp()
         self.root.after(1000, self._tick)
 
