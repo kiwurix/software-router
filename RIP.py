@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 from random import randint
 from threading import Lock
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from scapy.interfaces import NetworkInterface
 from scapy.layers.inet import IP, UDP
@@ -12,7 +15,9 @@ from scapy.layers.rip import RIP as RIPMessage, RIPEntry as RIPMessageEntry
 from scapy.packet import Packet
 
 from RIB import RIB, Route, RouteSource
-from router_port import RouterPort
+
+if TYPE_CHECKING:
+    from router import RouterPort
 
 
 @dataclass

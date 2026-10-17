@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
 from threading import Lock
+from typing import TYPE_CHECKING
 
-from router_port import RouterPort
+if TYPE_CHECKING:
+    from router import RouterPort
 
 
 class RouteSource(StrEnum):

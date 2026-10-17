@@ -1,8 +1,7 @@
 from ipaddress import IPv4Address, IPv4Interface, ip_network
 from collections.abc import Iterable
 
-from router import Router
-from router_port import RouterPort
+from router import Router, RouterPort
 
 
 class Controller:
