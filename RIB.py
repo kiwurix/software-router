@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
-from threading import Lock
 from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     from router import RouterPort
@@ -32,10 +32,10 @@ class Route:
 
 
 class RIB:
-    def __init__(self) -> None:
+    def __init__(self, lock) -> None:
         self._candidates: dict[IPv4Network, list[Route]] = {}
         self._selected: dict[IPv4Network, Route] = {}
-        self._lock = Lock()
+        self._lock = lock
 
     @staticmethod
     def _rib_update(func):
@@ -43,7 +43,7 @@ class RIB:
             if update:
                 with self._lock:
                     func(self, *args, **kwargs)
-                    self._rebuild_selected()
+                    self.rebuild_selected()
             else:
                 func(self, *args, **kwargs)
 
@@ -97,39 +97,45 @@ class RIB:
         with self._lock:
             return tuple(self._selected.values())
 
-    def _rebuild_selected(self) -> None:
-        ordered_candidates = {}
-        for network, candidates in self._candidates.items():
-            available = []
-            for route in candidates:
-                if route.possibly_down or (route.output_port is not None and route.output_port.ipv4 is None):
-                    continue
+    def get_static_routes(self) -> tuple[Route, ...]:
+        with self._lock:
+            return tuple(route for candidates in self._candidates.values()
+                         for route in candidates if route.source == RouteSource.STATIC)
 
-                available.append(route)
-            ordered_candidates[network] = sorted(available, key=lambda candidate: (candidate.AD, candidate.metric))
-
-        selected: dict[IPv4Network, Route] = {}
-        for network, candidates in ordered_candidates.items():
-            for route in candidates:
-                if route.source == RouteSource.CONNECTED:
-                    selected[network] = route
-                    break
-
-        changed = True
-        while changed:
-            changed = False
-            for network, candidates in ordered_candidates.items():
-                previous = selected.get(network)
+    def rebuild_selected(self) -> None:
+        with self._lock:
+            ordered_candidates = {}
+            for network, candidates in self._candidates.items():
+                available = []
                 for route in candidates:
-                    if route is previous:
-                        break
-                    updated = selected | {network: route}
-                    if route.output_port is None and self._resolve(route.next_hop, updated) is None:
+                    if route.possibly_down or (route.output_port is not None and route.output_port.ipv4 is None):
                         continue
-                    selected = updated
-                    changed = True
-                    break
-        self._selected = selected
+
+                    available.append(route)
+                ordered_candidates[network] = sorted(available, key=lambda candidate: (candidate.AD, candidate.metric))
+
+            selected: dict[IPv4Network, Route] = {}
+            for network, candidates in ordered_candidates.items():
+                for route in candidates:
+                    if route.source == RouteSource.CONNECTED:
+                        selected[network] = route
+                        break
+
+            changed = True
+            while changed:
+                changed = False
+                for network, candidates in ordered_candidates.items():
+                    previous = selected.get(network)
+                    for route in candidates:
+                        if route is previous:
+                            break
+                        updated = selected | {network: route}
+                        if route.output_port is None and self._resolve(route.next_hop, updated) is None:
+                            continue
+                        selected = updated
+                        changed = True
+                        break
+            self._selected = selected
 
     @staticmethod
     def _lookup(ip: IPv4Address, routes_by_network: dict[IPv4Network, Route]) -> Route | None:
@@ -151,4 +157,3 @@ class RIB:
                     return None
                 return route.output_port, route.next_hop if route.next_hop is not None else ip
             ip = route.next_hop
-

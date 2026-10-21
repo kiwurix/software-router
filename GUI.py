@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from controller import Controller
+from RIB import RouteSource
 
 
 class GUI:
@@ -9,102 +10,135 @@ class GUI:
         self.controller = controller
         self.root = tk.Tk()
         self.root.title("Software Router")
-        self.root.geometry("980x650")
+        self.root.geometry("940x640")
+        self.root.minsize(940, 640)
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.address = tk.StringVar(self.root)
+        self.mask = tk.StringVar(self.root)
+        self.rip_enabled = tk.BooleanVar(self.root)
+        self.static_network = tk.StringVar(self.root)
+        self.static_port = tk.StringVar(self.root, value="-")
+        self.static_next_hop = tk.StringVar(self.root)
+        self.static_AD = tk.StringVar(self.root, value="1")
+        self.arp_target = tk.StringVar(self.root)
+        self._port_choices = {f"Fa{port.index}": port.index for port in controller.ports}
+        self.arp_port = tk.StringVar(self.root, value=next(iter(self._port_choices), ""))
+        entry_lifetime, request_timeout = controller.get_arp_timers()
+        self.arp_entry_lifetime = tk.StringVar(self.root, value=str(entry_lifetime))
+        self.arp_request_timeout = tk.StringVar(self.root, value=str(request_timeout))
+        self._static_routes = {}
 
-        self.address = tk.StringVar()
-        self.mask = tk.StringVar()
-        self.arp_target = tk.StringVar()
-        entry_lifetime, request_timeout = self.controller.get_arp_timers()
-        self.arp_entry_lifetime = tk.StringVar(value=str(entry_lifetime))
-        self.arp_request_timeout = tk.StringVar(value=str(request_timeout))
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=12, pady=12)
+        for title, build in (("Interfaces", self._build_interfaces), ("Routing", self._build_routing), ("ARP", self._build_arp)):
+            tab = ttk.Frame(self.notebook, padding=12)
+            self.notebook.add(tab, text=title)
+            build(tab)
+        self._refresh()
+        self._after_id = self.root.after(1000, self._tick)
 
-        frame = ttk.Frame(self.root, padding=12)
-        frame.pack(fill="both", expand=True)
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
-        frame.rowconfigure(4, weight=1)
+    @staticmethod
+    def _make_table(parent, columns, selectmode="browse", height=8):
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True, pady=(6, 12))
+        table = ttk.Treeview(frame, columns=[key for key, _, _ in columns], show="headings",
+                             selectmode=selectmode, height=height)
+        for key, title, width in columns:
+            table.heading(key, text=title)
+            table.column(key, width=width, minwidth=45, stretch=True)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
+        table.configure(yscrollcommand=scrollbar.set)
+        table.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        return table
 
-        ttk.Label(frame, text="Interface IP addresses", font=("Segoe UI", 14, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 10)
-        )
-
-        self.table = ttk.Treeview(
-            frame,
-            columns=("port", "name", "mac", "ip", "mask"),
-            show="headings",
-            selectmode="browse",
-        )
-        for key, title, width in (
-            ("port", "Port", 60),
-            ("name", "Interface", 350),
-            ("mac", "MAC", 160),
-            ("ip", "Router IP", 140),
-            ("mask", "Subnet mask", 140),
-        ):
-            self.table.heading(key, text=title)
-            self.table.column(key, width=width, stretch=key == "name")
-        self.table.grid(row=1, column=0, sticky="nsew")
+    def _build_interfaces(self, parent) -> None:
+        ttk.Label(parent, text="Interface IP addresses", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.table = self._make_table(parent, (
+            ("interface", "Interface", 130), ("mac", "MAC", 180),
+            ("ip", "IP address", 140), ("mask", "Subnet mask", 140), ("rip", "RIP", 70),
+        ))
         self.table.bind("<<TreeviewSelect>>", self._on_select)
-
-        form = ttk.Frame(frame)
-        form.grid(row=2, column=0, sticky="w", pady=(12, 0))
+        form = ttk.Frame(parent)
+        form.pack(anchor="w", pady=(0, 10))
         ttk.Label(form, text="IPv4 address").grid(row=0, column=0, sticky="w")
         ttk.Label(form, text="Mask or /prefix").grid(row=0, column=1, sticky="w")
         ttk.Entry(form, textvariable=self.address, width=19).grid(row=1, column=0, padx=(0, 12))
         ttk.Entry(form, textvariable=self.mask, width=19).grid(row=1, column=1, padx=(0, 12))
-        ttk.Button(form, text="Apply", command=self._apply).grid(row=1, column=2, padx=(0, 8))
-        ttk.Button(form, text="Clear", command=self._clear).grid(row=1, column=3)
+        ttk.Button(form, text="Apply address", command=self._apply).grid(row=1, column=2, padx=(0, 8))
+        ttk.Button(form, text="Clear address", command=self._clear).grid(row=1, column=3, padx=(0, 16))
+        self.rip_toggle = ttk.Checkbutton(form, text="Enable RIP", variable=self.rip_enabled, command=self._set_rip_enabled)
+        self.rip_toggle.grid(row=1, column=4)
 
-        ttk.Label(frame, text="ARP table", font=("Segoe UI", 14, "bold")).grid(
-            row=3, column=0, sticky="w", pady=(16, 10)
-        )
-        self.arp_table = ttk.Treeview(
-            frame,
-            columns=("port", "ip", "mac", "age"),
-            show="headings",
-            selectmode="none",
-        )
-        for key, title, width in (
-            ("port", "Port", 90),
-            ("ip", "IP address", 230),
-            ("mac", "MAC address", 230),
-            ("age", "Age (s)", 120),
-        ):
-            self.arp_table.heading(key, text=title)
-            self.arp_table.column(key, width=width, stretch=key in ("ip", "mac"))
-        self.arp_table.grid(row=4, column=0, sticky="nsew")
+    def _build_routing(self, parent) -> None:
+        ttk.Label(parent, text="Routing table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.routing_table = self._make_table(parent, (
+            ("code", "Code", 60), ("network", "Network", 220), ("preference", "[AD/Metric]", 130),
+            ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
+        ), selectmode="none", height=6)
+        ttk.Label(parent, text="Static routes configuration", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.static_table = self._make_table(parent, (
+            ("state", "State", 120), ("network", "Network", 220), ("AD", "AD", 70),
+            ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
+        ), height=6)
+        form = ttk.Frame(parent)
+        form.pack(anchor="w", pady=(10, 0))
+        for column, label in enumerate(("Network / prefix", "Interface", "Next hop", "AD")):
+            ttk.Label(form, text=label).grid(row=0, column=column, sticky="w")
+        ttk.Entry(form, textvariable=self.static_network, width=22).grid(row=1, column=0, padx=(0, 12))
+        ttk.Combobox(form, textvariable=self.static_port, values=("-", *self._port_choices),
+                     state="readonly", width=24).grid(row=1, column=1, padx=(0, 12))
+        ttk.Entry(form, textvariable=self.static_next_hop, width=18).grid(row=1, column=2, padx=(0, 12))
+        ttk.Entry(form, textvariable=self.static_AD, width=7).grid(row=1, column=3, padx=(0, 12))
+        ttk.Button(form, text="Add route", command=self._add_static_route).grid(row=1, column=4)
+        ttk.Button(parent, text="Delete selected static route", command=self._remove_static_route).pack(anchor="w", pady=(10, 0))
 
-        arp_controls = ttk.Frame(frame)
-        arp_controls.grid(row=5, column=0, sticky="w", pady=(10, 0))
-        ttk.Label(arp_controls, text="Target IPv4").pack(side="left", padx=(0, 8))
-        ttk.Entry(arp_controls, textvariable=self.arp_target, width=19).pack(
-            side="left", padx=(0, 8)
-        )
-        ttk.Button(arp_controls, text="Send ARP request", command=self._send_arp_request).pack(
-            side="left", padx=(0, 8)
-        )
-        ttk.Button(arp_controls, text="Clear ARP table", command=self._clear_arp).pack(side="left")
+    def _build_arp(self, parent) -> None:
+        ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.arp_table = self._make_table(parent, (
+            ("interface", "Interface", 100), ("ip", "IP address", 230), ("mac", "MAC address", 230), ("age", "Age (s)", 120),
+        ))
+        controls = ttk.Frame(parent)
+        controls.pack(anchor="w", pady=(0, 10))
+        ttk.Label(controls, text="Interface").grid(row=0, column=0, sticky="w")
+        ttk.Label(controls, text="Target IPv4").grid(row=0, column=1, sticky="w")
+        ttk.Combobox(controls, textvariable=self.arp_port, values=tuple(self._port_choices),
+                     state="readonly", width=28).grid(row=1, column=0, padx=(0, 12))
+        ttk.Entry(controls, textvariable=self.arp_target, width=19).grid(row=1, column=1, padx=(0, 12))
+        ttk.Button(controls, text="Send ARP request", command=self._send_arp_request).grid(row=1, column=2)
+        buttons = ttk.Frame(parent)
+        buttons.pack(anchor="w", pady=(0, 16))
+        ttk.Button(buttons, text="Delete selected entry", command=self._remove_arp_entry).pack(side="left", padx=(0, 8))
+        ttk.Button(buttons, text="Clear ARP table", command=self._clear_arp).pack(side="left")
+        timers = ttk.Frame(parent)
+        timers.pack(anchor="w")
+        ttk.Label(timers, text="ARP entry lifetime (s)").grid(row=0, column=0, sticky="w")
+        ttk.Label(timers, text="ARP request timeout (s)").grid(row=0, column=1, sticky="w")
+        ttk.Entry(timers, textvariable=self.arp_entry_lifetime, width=20).grid(row=1, column=0, padx=(0, 12))
+        ttk.Entry(timers, textvariable=self.arp_request_timeout, width=20).grid(row=1, column=1, padx=(0, 12))
+        ttk.Button(timers, text="Apply timers", command=self._apply_arp_timers).grid(row=1, column=2)
 
-        arp_timers = ttk.Frame(frame)
-        arp_timers.grid(row=6, column=0, sticky="w", pady=(10, 0))
-        ttk.Label(arp_timers, text="ARP entry lifetime (s)").grid(row=0, column=0, sticky="w")
-        ttk.Label(arp_timers, text="ARP request timeout (s)").grid(row=0, column=1, sticky="w")
-        ttk.Entry(arp_timers, textvariable=self.arp_entry_lifetime, width=18).grid(
-            row=1, column=0, padx=(0, 12)
-        )
-        ttk.Entry(arp_timers, textvariable=self.arp_request_timeout, width=18).grid(
-            row=1, column=1, padx=(0, 12)
-        )
-        ttk.Button(arp_timers, text="Apply timers", command=self._apply_arp_timers).grid(
-            row=1, column=2
-        )
-
-        self._refresh()
-        self._refresh_arp()
-        self.root.after(1000, self._tick)
+    @staticmethod
+    def _sync_table(table, rows) -> None:
+        for iid in table.get_children():
+            if iid not in rows:
+                table.delete(iid)
+        for position, (iid, values) in enumerate(rows.items()):
+            values = tuple(str(value) for value in values)
+            if table.exists(iid):
+                if table.item(iid, "values") != values:
+                    table.item(iid, values=values)
+            else:
+                table.insert("", "end", iid=iid, values=values)
+            if table.index(iid) != position:
+                table.move(iid, "", position)
 
     def show(self) -> None:
         self.root.mainloop()
+
+    def _close(self) -> None:
+        self.root.after_cancel(self._after_id)
+        self.root.destroy()
 
     def _selected_port_idx(self) -> int | None:
         selected = self.table.selection()
@@ -114,27 +148,53 @@ class GUI:
         port_idx = self._selected_port_idx()
         if port_idx is None:
             return
-        configured = self.controller.ports[port_idx].ipv4
-        self.address.set(str(configured.ip) if configured else "")
-        self.mask.set(str(configured.network.netmask) if configured else "")
+        port = self.controller.ports[port_idx]
+        ipv4 = port.ipv4
+        self.address.set(str(ipv4.ip) if ipv4 else "")
+        self.mask.set(str(ipv4.network.netmask) if ipv4 else "")
+        self.rip_enabled.set(port.rip_enabled)
 
     def _refresh(self) -> None:
-        selected = self._selected_port_idx()
-        self.table.delete(*self.table.get_children())
+        rows = {}
         ports = self.controller.ports
-        for port_idx, port in enumerate(ports):
-            self.table.insert("", "end", iid=str(port_idx), values=(
-                port_idx,
-                port.device.name,
-                port.mac,
-                str(port.ipv4.ip) if port.ipv4 else "",
-                str(port.ipv4.network.netmask) if port.ipv4 else "",
-            ))
-        if selected is not None:
-            self.table.selection_set(str(selected))
-        elif ports:
-            self.table.selection_set("0")
+        for port in ports:
+            ipv4 = port.ipv4
+            rows[str(port.index)] = (f"Fa{port.index}", port.mac, str(ipv4.ip) if ipv4 else "",
+                                     str(ipv4.network.netmask) if ipv4 else "", "On" if port.rip_enabled else "Off")
+        self._sync_table(self.table, rows)
+        if not self.table.selection() and rows:
+            self.table.selection_set(next(iter(rows)))
             self._on_select()
+        selected = self._selected_port_idx()
+        if selected is not None:
+            self.rip_enabled.set(ports[selected].rip_enabled)
+        self._refresh_routes()
+        self._refresh_arp()
+
+    def _refresh_routes(self) -> None:
+        selected = sorted(self.controller.get_selected_routes(),
+                          key=lambda route: (int(route.network.network_address), route.network.prefixlen))
+        rows = {}
+        for route in selected:
+            preference = "" if route.source == RouteSource.CONNECTED else f"[{route.AD}/{route.metric}]"
+            next_hop = f"via {route.next_hop}" if route.next_hop is not None else "directly connected"
+            interface = f"Fa{route.output_port.index}" if route.output_port else "Recursive"
+            rows[str(route.network)] = (route.source, route.network, preference, next_hop, interface)
+        self._sync_table(self.routing_table, rows)
+        selected_by_network = {route.network: route for route in selected}
+        statics = sorted(self.controller.get_static_routes(),
+                         key=lambda route: (int(route.network.network_address), route.network.prefixlen, route.AD))
+        self._static_routes = {str(id(route)): route for route in statics}
+        rows = {iid: ("Selected" if selected_by_network.get(route.network) == route else "Inactive",
+                      route.network, route.AD, route.next_hop if route.next_hop is not None else "directly connected",
+                      f"Fa{route.output_port.index}" if route.output_port else "Recursive")
+                for iid, route in self._static_routes.items()}
+        self._sync_table(self.static_table, rows)
+
+    def _refresh_arp(self) -> None:
+        rows = {f"{port_index}:{ip}": (f"Fa{port_index}", ip, mac, age)
+                for port_index, ip, mac, age in self.controller.get_arp_table()}
+        self._sync_table(self.arp_table, rows)
 
     def _apply(self) -> None:
         port_idx = self._selected_port_idx()
@@ -147,29 +207,58 @@ class GUI:
             messagebox.showerror("Invalid IP configuration", str(exc))
             return
         self._refresh()
+        self._on_select()
 
     def _clear(self) -> None:
         port_idx = self._selected_port_idx()
         if port_idx is None:
             return
         self.controller.clear_address(port_idx)
-        self.address.set("")
-        self.mask.set("")
         self._refresh()
+        self._on_select()
 
-    def _tick(self) -> None:
-        self._refresh_arp()
-        self.root.after(1000, self._tick)
-
-    def _refresh_arp(self) -> None:
-        self.arp_table.delete(*self.arp_table.get_children())
-        for port_idx, dst_ip, mac, age in self.controller.get_arp_table():
-            self.arp_table.insert("", "end", values=(port_idx, dst_ip, mac, age))
-
-    def _send_arp_request(self) -> None:
+    def _set_rip_enabled(self) -> None:
         port_idx = self._selected_port_idx()
         if port_idx is None:
+            self.rip_enabled.set(False)
             messagebox.showinfo("No interface", "Select an interface first.")
+            return
+        try:
+            self.controller.set_rip_enabled(port_idx, self.rip_enabled.get())
+        except ValueError as exc:
+            messagebox.showerror("RIP configuration", str(exc))
+        self._refresh()
+        self._on_select()
+
+    def _add_static_route(self) -> None:
+        try:
+            route = self.controller.add_static_route(self.static_network.get(), self._port_choices.get(self.static_port.get()),
+                                                      self.static_next_hop.get(), self.static_AD.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid static route", str(exc))
+            return
+        self._refresh_routes()
+        self.static_table.selection_set(str(id(route)))
+
+    def _remove_static_route(self) -> None:
+        selected = self.static_table.selection()
+        if not selected:
+            messagebox.showinfo("No static route", "Select a static route first.")
+            return
+        try:
+            self.controller.remove_static_route(self._static_routes[selected[0]])
+        except ValueError as exc:
+            messagebox.showerror("Static route", str(exc))
+        self._refresh_routes()
+
+    def _tick(self) -> None:
+        self._refresh()
+        self._after_id = self.root.after(1000, self._tick)
+
+    def _send_arp_request(self) -> None:
+        port_idx = self._port_choices.get(self.arp_port.get())
+        if port_idx is None:
+            messagebox.showinfo("No interface", "Choose an interface first.")
             return
         try:
             sent = self.controller.send_arp_request(port_idx, self.arp_target.get())
@@ -178,6 +267,16 @@ class GUI:
             return
         if not sent:
             messagebox.showerror("ARP request", "Failed to send the request.")
+        self._refresh_arp()
+
+    def _remove_arp_entry(self) -> None:
+        selected = self.arp_table.selection()
+        if not selected:
+            messagebox.showinfo("No ARP entry", "Select an ARP entry first.")
+            return
+        port_index, ip = selected[0].split(":", 1)
+        self.controller.remove_arp_entry(int(port_index), ip)
+        self._refresh_arp()
 
     def _clear_arp(self) -> None:
         self.controller.clear_arp()
@@ -185,9 +284,7 @@ class GUI:
 
     def _apply_arp_timers(self) -> None:
         try:
-            self.controller.set_arp_timers(
-                self.arp_entry_lifetime.get(), self.arp_request_timeout.get()
-            )
+            self.controller.set_arp_timers(self.arp_entry_lifetime.get(), self.arp_request_timeout.get())
         except ValueError as exc:
             messagebox.showerror("ARP timers", str(exc))
             return

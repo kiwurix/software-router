@@ -1,7 +1,8 @@
-from ipaddress import IPv4Address, IPv4Interface, ip_network
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network, ip_network
 from collections.abc import Iterable
 
 from router import Router, RouterPort
+from RIB import Route, RouteSource
 
 
 class Controller:
@@ -39,10 +40,54 @@ class Controller:
 
     def clear_address(self, port_index: int) -> None:
         self._check_port(port_index)
-        self.router.clear_address(port_index)
+        self.router.set_address(port_index, None)
+
+    def set_rip_enabled(self, port_index: int, enabled: bool) -> None:
+        self._check_port(port_index)
+        self.router.set_rip_enabled(port_index, enabled)
+
+    def add_static_route(self, network: str, port_index: int | None = None,
+                         next_hop: str = "", AD: str = "1") -> Route:
+        try:
+            destination = IPv4Network(network.strip())
+            neighbour = IPv4Address(next_hop.strip()) if next_hop.strip() else None
+            distance = int(AD.strip())
+        except ValueError as exc:
+            raise ValueError("Enter a valid network/prefix, next-hop IPv4 address and administrative distance.") from exc
+        if not 1 <= distance <= 254:
+            raise ValueError("Administrative distance must be between 1 and 254.")
+        output_port = None
+        if port_index is not None:
+            self._check_port(port_index)
+            output_port = self.router.ports[port_index]
+        if neighbour is not None:
+            if neighbour.is_unspecified or neighbour.is_loopback or neighbour.is_multicast or neighbour.is_reserved:
+                raise ValueError("Choose a unicast next-hop IPv4 address.")
+            if any(port.ipv4 is not None and port.ipv4.ip == neighbour for port in self.router.ports):
+                raise ValueError("The next hop cannot be one of the router's own addresses.")
+        route = Route(RouteSource.STATIC, distance, destination, output_port, neighbour)
+        if route in self.router.get_static_routes():
+            raise ValueError("This static route is already configured.")
+        self.router.add_static_route(route)
+        return route
+
+    def remove_static_route(self, route: Route) -> None:
+        if route not in self.router.get_static_routes():
+            raise ValueError("Select a configured static route.")
+        self.router.remove_static_route(route)
+
+    def get_selected_routes(self) -> tuple[Route, ...]:
+        return self.router.get_selected_routes()
+
+    def get_static_routes(self) -> tuple[Route, ...]:
+        return self.router.get_static_routes()
 
     def get_arp_table(self) -> list[tuple[int, IPv4Address, str, int]]:
         return self.router.get_arp_table()
+
+    def remove_arp_entry(self, port_index: int, address: str) -> None:
+        self._check_port(port_index)
+        self.router.remove_arp_entry(port_index, IPv4Address(address.strip()))
 
     def get_arp_timers(self) -> tuple[int, int]:
         return self.router.get_arp_timers()

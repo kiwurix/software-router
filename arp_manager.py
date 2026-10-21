@@ -1,5 +1,4 @@
 from ipaddress import IPv4Address
-from threading import Lock
 from time import monotonic
 
 from scapy.layers.l2 import ARP, Ether
@@ -7,12 +6,12 @@ from scapy.packet import Packet
 
 
 class ArpManager:
-    def __init__(self, entry_lifetime: int = 300, request_timeout: int = 5) -> None:
+    def __init__(self, lock, entry_lifetime: int = 300, request_timeout: int = 5) -> None:
         self.entry_lifetime = entry_lifetime
         self.request_timeout = request_timeout
         self._cache: dict[tuple[int, IPv4Address], tuple[str, float]] = {}
         self._pending_requests: dict[tuple[int, IPv4Address], float] = {}
-        self._lock = Lock()
+        self._lock = lock
 
     def build_request(self, port_index: int, src_mac: str, src_ip: IPv4Address, dst_ip: IPv4Address) -> Packet:
         src_mac = src_mac.lower()
@@ -68,6 +67,10 @@ class ArpManager:
     def is_pending(self, port_index: int, dst_ip: IPv4Address) -> bool:
         with self._lock:
             return (port_index, dst_ip) in self._pending_requests
+
+    def remove_entry(self, port_index: int, ip: IPv4Address) -> None:
+        with self._lock:
+            self._cache.pop((port_index, ip), None)
 
     def clear_port(self, port_index: int) -> None:
         with self._lock:

@@ -5,14 +5,14 @@ from threading import RLock, Thread
 from time import sleep
 
 from scapy.interfaces import NetworkInterface
-from scapy.layers.inet import IP, UDP
+from scapy.layers.inet import ICMP, IP, UDP
 from scapy.layers.l2 import ARP, Ether
 from scapy.packet import Packet
 from scapy.sendrecv import AsyncSniffer, sendp
 from scapy.utils import checksum
 
 from arp_manager import ArpManager
-from RIB import RIB
+from RIB import RIB, Route
 from RIP import RIP
 
 
@@ -31,14 +31,14 @@ class Router:
             RouterPort(index, device, device.mac.lower()) for index, device in enumerate(devices)
         ]
         self._own_macs = frozenset(port.mac for port in self._ports)
-        self.rib = RIB()
-        self.rip = RIP(self._ports, self.rib, self._send_frame)
-        self.arp = ArpManager()
+        self._lock = RLock()
+        self.rib = RIB(self._lock)
+        self.rip = RIP(self._ports, self.rib, self._send_frame, self._lock)
+        self.arp = ArpManager(lock=self._lock)
         self._pending_packets: dict[tuple[int, IPv4Address], list[IP]] = {}
         self._sniffer: AsyncSniffer | None = None
         self._timers_running = False
         self._timer_thread: Thread | None = None
-        self._lock = RLock()
 
     def start(self) -> None:
         if not self._ports or self._sniffer is not None:
@@ -50,8 +50,6 @@ class Router:
             store=False,
         )
         self._sniffer.start()
-        with self._lock:
-            self.rip.send_request(self._ports)
         self._timers_running = True
         self._timer_thread = Thread(target=self._run_timers, daemon=True)
         self._timer_thread.start()
@@ -101,11 +99,26 @@ class Router:
                 if not self._is_local_ip(IPv4Address(packet.dst)):
                     self._process_ipv4(packet)
                     return
+                if isinstance(packet.payload, ICMP):
+                    self._handle_icmp(port, frame)
+                    return
             elif dst_mac != "01:00:5e:00:00:09" or packet.dst != "224.0.0.9":
                 return
 
-            if packet.proto == 17 and isinstance(packet.payload, UDP) and packet.payload.dport == 520:
-                self.rip.handle(frame, port)
+            if isinstance(packet.payload, UDP) and packet.payload.dport == 520:
+                self.rip.handle(port, frame)
+
+    def _handle_icmp(self, port: RouterPort, frame: Packet) -> None:
+        packet = frame[IP]
+        request = packet[ICMP]
+        if request.type != 8 or request.code != 0:
+            return
+        reply = (Ether(src=port.mac, dst=frame[Ether].src) /
+                 IP(src=packet.dst, dst=packet.src) /
+                 ICMP(type=0, id=request.id, seq=request.seq) /
+                 request.payload)
+
+        self._send_frame(reply, port.device)
 
     def _is_local_ip(self, ip: IPv4Address) -> bool:
         return any(port.ipv4 is not None and port.ipv4.ip == ip for port in self._ports)
@@ -190,19 +203,28 @@ class Router:
         with self._lock:
             return tuple(self._ports)
 
-    def set_address(self, port_index: int, ipv4: IPv4Interface) -> None:
+    def set_address(self, port_index: int, ipv4: IPv4Interface | None) -> None:
         with self._lock:
-            self._ports[port_index].ipv4 = ipv4
-            self.rib.update_port_routes(self._ports[port_index])
+            port = self._ports[port_index]
+            if port.ipv4 == ipv4:
+                return
+            with self.rip.advertise_changes():
+                self.rip.invalidate_port_routes(port, update=False)
+                port.ipv4 = ipv4
+                self.rib.update_port_routes(port)
+            self.rip.send_request([port])
             self.arp.clear_port(port_index)
             self._pending_packets = {key: packets for key, packets in self._pending_packets.items() if key[0] != port_index}
 
-    def clear_address(self, port_index: int) -> None:
+    def set_rip_enabled(self, port_index: int, enabled: bool) -> None:
         with self._lock:
-            self._ports[port_index].ipv4 = None
-            self.rib.update_port_routes(self._ports[port_index])
-            self.arp.clear_port(port_index)
-            self._pending_packets = {key: packets for key, packets in self._pending_packets.items() if key[0] != port_index}
+            port = self._ports[port_index]
+            if port.rip_enabled == enabled:
+                return
+            with self.rip.advertise_changes():
+                self.rip.invalidate_port_routes(port)
+                port.rip_enabled = enabled
+            self.rip.send_request([port])
 
     def update_timers(self) -> None:
         with self._lock:
@@ -211,8 +233,28 @@ class Router:
                 self._pending_packets.pop(key, None)
             self.rip.update_timers()
 
+    def add_static_route(self, route: Route) -> None:
+        with self._lock, self.rip.advertise_changes():
+            self.rib.add_route(route)
+
+    def remove_static_route(self, route: Route) -> None:
+        with self._lock, self.rip.advertise_changes():
+            self.rib.remove_route(route)
+
+    def get_selected_routes(self) -> tuple[Route, ...]:
+        with self._lock:
+            return self.rib.get_selected_routes()
+
+    def get_static_routes(self) -> tuple[Route, ...]:
+        with self._lock:
+            return self.rib.get_static_routes()
+
     def get_arp_table(self) -> list[tuple[int, IPv4Address, str, int]]:
         return self.arp.get_table()
+
+    def remove_arp_entry(self, port_index: int, ip: IPv4Address) -> None:
+        with self._lock:
+            self.arp.remove_entry(port_index, ip)
 
     def get_arp_timers(self) -> tuple[int, int]:
         return self.arp.get_timers()

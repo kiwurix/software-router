@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 from random import randint
-from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -40,7 +40,7 @@ class RIPAdvertisement:
 
 class RIP:
     def __init__(self, ports: list[RouterPort], rib: RIB,
-                 send_frame: Callable[[Packet, NetworkInterface], bool]) -> None:
+                 send_frame: Callable[[Packet, NetworkInterface], bool], lock) -> None:
         self._ports = ports
         self._rib = rib
         self._send_frame = send_frame
@@ -49,7 +49,7 @@ class RIP:
         self._update_started_at = monotonic()
         self._trigger_started_at: float | None = None
         self._trigger_delay = 0
-        self._lock = Lock()
+        self._lock = lock
 
     @staticmethod
     def _locked(func):
@@ -59,8 +59,15 @@ class RIP:
 
         return wrapper
 
+    @contextmanager
+    def advertise_changes(self):
+        with self._lock:
+            before = self._get_advertisement_data()
+            yield
+            self._detect_and_advertise_changes(before)
+
     @_locked
-    def handle(self, frame: Packet, port: RouterPort) -> None:
+    def handle(self, port: RouterPort, frame: Packet) -> None:
         if not port.rip_enabled:
             return
 
@@ -78,16 +85,16 @@ class RIP:
             return
 
         if message.cmd == 1:
-            self._handle_request(frame, port, entries)
+            self._handle_request(port, frame, entries)
         elif message.cmd == 2:
-            self._handle_response(frame, port, entries)
+            self._handle_response(port, frame, entries)
 
-    def _handle_request(self, frame: Packet, port: RouterPort, entries: list[RIPMessageEntry]) -> None:
+    def _handle_request(self, port: RouterPort, frame: Packet, entries: list[RIPMessageEntry]) -> None:
         if len(entries) == 1 and entries[0].AF == 0 and entries[0].metric == 16:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
             self.send_response([port], advertisements, reply_to=frame)
 
-    def _handle_response(self, frame: Packet, port: RouterPort, entries: list[RIPMessageEntry]) -> None:
+    def _handle_response(self, port: RouterPort, frame: Packet, entries: list[RIPMessageEntry]) -> None:
         advertiser_ip = IPv4Address(frame[IP].src)
         
         if frame[UDP].sport != 520 or advertiser_ip not in port.ipv4.network:
@@ -97,6 +104,7 @@ class RIP:
 
         before = self._get_advertisement_data()
         now = monotonic()
+        rib_changed = False
         for entry in entries:
             if entry.AF != 2 or not 1 <= entry.metric <= 16:
                 continue
@@ -105,20 +113,24 @@ class RIP:
                 continue
 
             old_record = self._database.get(network)
-            old_is_finite = False
+            old_route = None
 
             if old_record is not None:
-                if old_record.hold_down or (
-                        old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric):
-                    continue
-                old_is_finite = old_record.metric < 16
+                if old_record.hold_down or \
+                        old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric:
 
-            if old_is_finite:
-                self._rib.remove_route(self._build_rib_route(network, old_record))
+                    continue
+
+                if old_record.metric < 16:
+                    old_route = self._build_rib_route(network, old_record)
+
+
 
             if entry.metric == 16:
-                if old_is_finite:
+                if old_route:
                     old_record.metric = 16
+                    self._rib.remove_route(old_route, update=False)
+                    rib_changed = True
                 continue
 
             next_hop = IPv4Address(entry.nextHop)
@@ -127,29 +139,58 @@ class RIP:
 
             record = RIPRecord(entry.metric, next_hop, port, advertiser_ip, now, entry.RouteTag)
             self._database[network] = record
-            self._rib.add_route(self._build_rib_route(network, record))
 
-        self._process_advertisement_changes(before)
+            new_route = self._build_rib_route(network, record)
+
+            if old_route:
+                if new_route != old_route:
+                    self._rib.replace_route(old_route, new_route, update=False)
+                    rib_changed = True
+            else:
+                self._rib.add_route(new_route, update=False)
+                rib_changed = True
+
+        if rib_changed:
+            self._rib.rebuild_selected()
+        self._detect_and_advertise_changes(before)
 
     @_locked
     def update_timers(self) -> None:
         before = self._get_advertisement_data()
         now = monotonic()
+        rib_changed = False
         for network, record in tuple(self._database.items()):
             elapsed = now - record.updated_at
             if elapsed >= 240:
                 if record.metric < 16 or record.hold_down:
-                    self._rib.remove_route(self._build_rib_route(network, record))
+                    self._rib.remove_route(self._build_rib_route(network, record), update=False)
+                    rib_changed = True
                 del self._database[network]
             elif elapsed >= 180 and record.metric < 16:
                 old_route = self._build_rib_route(network, record)
                 record.metric = 16
                 record.hold_down = True
-                self._rib.replace_route(old_route, self._build_rib_route(network, record))
+                self._rib.replace_route(old_route, self._build_rib_route(network, record), update=False)
+                rib_changed = True
 
-        self._process_advertisement_changes(before)
+        if rib_changed:
+            self._rib.rebuild_selected()
+        self._detect_and_advertise_changes(before)
 
-    def _process_advertisement_changes(self, before: dict[IPv4Network, RIPAdvertisement]) -> None:
+    def invalidate_port_routes(self, port: RouterPort, *, update=True) -> None:
+        rib_changed = False
+        for network, record in self._database.items():
+            if record.learned_port is not port:
+                continue
+            if record.metric < 16 or record.hold_down:
+                self._rib.remove_route(self._build_rib_route(network, record), update=False)
+                rib_changed = True
+            record.metric = 16
+            record.hold_down = False
+        if update and rib_changed:
+            self._rib.rebuild_selected()
+
+    def _detect_and_advertise_changes(self, before: dict[IPv4Network, RIPAdvertisement]) -> None:
         after = self._get_advertisement_data()
         for network in before.keys() | after.keys():
             if before.get(network) != after.get(network):
