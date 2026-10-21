@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from scapy.interfaces import NetworkInterface
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
-from scapy.layers.rip import RIP as RIPMessage, RIPEntry as RIPMessageEntry
+from scapy.layers.rip import RIP as RIPBase, RIPEntry
 from scapy.packet import Packet
 
 from RIB import RIB, Route, RouteSource
@@ -72,12 +72,12 @@ class RIP:
             return
 
         message = frame[UDP].payload
-        if not isinstance(message, RIPMessage) or message.version != 2:
+        if not isinstance(message, RIPBase) or message.version != 2:
             return
 
         entries = []
         entry = message.payload
-        while isinstance(entry, RIPMessageEntry):
+        while isinstance(entry, RIPEntry):
             entries.append(entry)
             entry = entry.payload
 
@@ -89,12 +89,12 @@ class RIP:
         elif message.cmd == 2:
             self._handle_response(port, frame, entries)
 
-    def _handle_request(self, port: RouterPort, frame: Packet, entries: list[RIPMessageEntry]) -> None:
+    def _handle_request(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
         if len(entries) == 1 and entries[0].AF == 0 and entries[0].metric == 16:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
             self.send_response([port], advertisements, reply_to=frame)
 
-    def _handle_response(self, port: RouterPort, frame: Packet, entries: list[RIPMessageEntry]) -> None:
+    def _handle_response(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
         advertiser_ip = IPv4Address(frame[IP].src)
         
         if frame[UDP].sport != 520 or advertiser_ip not in port.ipv4.network:
@@ -198,7 +198,7 @@ class RIP:
         self._send_update()
 
     @staticmethod
-    def _parse_network(entry: RIPMessageEntry) -> IPv4Network | None:
+    def _parse_network(entry: RIPEntry) -> IPv4Network | None:
         try:
             network = IPv4Network((entry.addr, entry.mask))
         except ValueError:
@@ -235,7 +235,7 @@ class RIP:
         return advertisement_data
 
     def send_request(self, ports: list[RouterPort]) -> None:
-        entries = [RIPMessageEntry(AF=0, metric=16)]
+        entries = [RIPEntry(AF=0, metric=16)]
         for port in ports:
             if port.rip_enabled and port.ipv4 is not None:
                 self._send_frame(self._build_frame(port, entries, command=1), port.device)
@@ -252,7 +252,7 @@ class RIP:
                 if advertisement.learned_port is port:
                     continue
 
-                entries.append(RIPMessageEntry(
+                entries.append(RIPEntry(
                     AF=2, RouteTag=advertisement.tag, addr=str(network.network_address), mask=str(network.netmask),
                     nextHop="0.0.0.0", metric=min(advertisement.metric + 1, 16),
                 ))
@@ -266,14 +266,14 @@ class RIP:
         return all([self._send_frame(frame, device) for frame, device in frames])
 
     @staticmethod
-    def _build_frame(port: RouterPort, entries: list[RIPMessageEntry], command: int,
+    def _build_frame(port: RouterPort, entries: list[RIPEntry], command: int,
                      reply_to: Packet | None = None) -> Packet:
         if reply_to is None:
             dst_mac, dst_ip, dst_port = "01:00:5e:00:00:09", "224.0.0.9", 520
         else:
             dst_mac, dst_ip, dst_port = reply_to[Ether].src, reply_to[IP].src, reply_to[UDP].sport
 
-        message = RIPMessage(cmd=command, version=2)
+        message = RIPBase(cmd=command, version=2)
         for entry in entries:
             message /= entry
         return (
