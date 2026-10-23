@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ipaddress import IPv4Address, IPv4Network
 from random import randint
 from time import monotonic
@@ -28,7 +28,7 @@ class RIPRecord:
     advertiser_ip: IPv4Address
     updated_at: float
     tag: int
-    hold_down: bool = False
+    hold_down_started_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -46,10 +46,22 @@ class RIP:
         self._send_frame = send_frame
         self._database: dict[IPv4Network, RIPRecord] = {}
         self._changed_advertisements: dict[IPv4Network, RIPAdvertisement] = {}
+        self._update_interval = 30
+        self._invalid_timeout = 180
+        self._hold_down_timeout = 180
+        self._flush_timeout = 240
         self._update_started_at = monotonic()
         self._trigger_started_at: float | None = None
         self._trigger_delay = 0
         self._lock = lock
+
+    def get_timers(self) -> tuple[int, int, int, int]:
+        with self._lock:
+            return self._update_interval, self._invalid_timeout, self._hold_down_timeout, self._flush_timeout
+
+    def get_database(self) -> dict[IPv4Network, RIPRecord]:
+        with self._lock:
+            return {network: replace(record) for network, record in self._database.items()}
 
     @staticmethod
     def _locked(func):
@@ -58,6 +70,13 @@ class RIP:
                 func(self, *args, **kwargs)
 
         return wrapper
+
+    @_locked
+    def set_timers(self, update_interval: int, invalid_timeout: int, hold_down_timeout: int, flush_timeout: int) -> None:
+        self._update_interval = update_interval
+        self._invalid_timeout = invalid_timeout
+        self._hold_down_timeout = hold_down_timeout
+        self._flush_timeout = flush_timeout
 
     @contextmanager
     def advertise_changes(self):
@@ -116,12 +135,13 @@ class RIP:
             old_route = None
 
             if old_record is not None:
-                if old_record.hold_down or \
-                        old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric:
-
+                if (old_record.hold_down_started_at is not None and
+                        now - old_record.hold_down_started_at < self._hold_down_timeout):
+                        continue
+                if old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric:
                     continue
 
-                if old_record.metric < 16:
+                if old_record.metric < 16 or old_record.hold_down_started_at is not None:
                     old_route = self._build_rib_route(network, old_record)
 
 
@@ -129,6 +149,7 @@ class RIP:
             if entry.metric == 16:
                 if old_route:
                     old_record.metric = 16
+                    old_record.hold_down_started_at = None
                     self._rib.remove_route(old_route, update=False)
                     rib_changed = True
                 continue
@@ -161,15 +182,15 @@ class RIP:
         rib_changed = False
         for network, record in tuple(self._database.items()):
             elapsed = now - record.updated_at
-            if elapsed >= 240:
-                if record.metric < 16 or record.hold_down:
+            if elapsed >= self._flush_timeout:
+                if record.metric < 16 or record.hold_down_started_at is not None:
                     self._rib.remove_route(self._build_rib_route(network, record), update=False)
                     rib_changed = True
                 del self._database[network]
-            elif elapsed >= 180 and record.metric < 16:
+            elif elapsed >= self._invalid_timeout and record.metric < 16:
                 old_route = self._build_rib_route(network, record)
                 record.metric = 16
-                record.hold_down = True
+                record.hold_down_started_at = now
                 self._rib.replace_route(old_route, self._build_rib_route(network, record), update=False)
                 rib_changed = True
 
@@ -182,11 +203,11 @@ class RIP:
         for network, record in self._database.items():
             if record.learned_port is not port:
                 continue
-            if record.metric < 16 or record.hold_down:
+            if record.metric < 16 or record.hold_down_started_at is not None:
                 self._rib.remove_route(self._build_rib_route(network, record), update=False)
                 rib_changed = True
             record.metric = 16
-            record.hold_down = False
+            record.hold_down_started_at = None
         if update and rib_changed:
             self._rib.rebuild_selected()
 
@@ -214,7 +235,7 @@ class RIP:
             output_port=record.learned_port,
             next_hop=record.next_hop,
             metric=record.metric,
-            possibly_down=record.hold_down,
+            possibly_down=record.hold_down_started_at is not None,
         )
 
     def _get_advertisement_data(self) -> dict[IPv4Network, RIPAdvertisement]:
@@ -285,7 +306,7 @@ class RIP:
 
     def _send_update(self) -> None:
         now = monotonic()
-        if now - self._update_started_at >= 30:
+        if now - self._update_started_at >= self._update_interval:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
             if self.send_response(self._ports, advertisements):
                 self._changed_advertisements.clear()

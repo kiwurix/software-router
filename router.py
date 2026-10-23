@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv4Interface
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 from threading import RLock, Thread
 from time import sleep
 
@@ -13,7 +13,7 @@ from scapy.utils import checksum
 
 from arp_manager import ArpManager
 from RIB import RIB, Route
-from RIP import RIP
+from RIP import RIP, RIPRecord
 
 
 @dataclass
@@ -222,7 +222,8 @@ class Router:
             if port.rip_enabled == enabled:
                 return
             with self.rip.advertise_changes():
-                self.rip.invalidate_port_routes(port)
+                if not enabled:
+                    self.rip.invalidate_port_routes(port)
                 port.rip_enabled = enabled
             self.rip.send_request([port])
 
@@ -258,6 +259,15 @@ class Router:
 
     def get_arp_timers(self) -> tuple[int, int]:
         return self.arp.get_timers()
+
+    def get_rip_timers(self) -> tuple[int, int, int, int]:
+        return self.rip.get_timers()
+
+    def get_rip_database(self) -> dict[IPv4Network, RIPRecord]:
+        return self.rip.get_database()
+
+    def set_rip_timers(self, update_interval: int, invalid_timeout: int, hold_down_timeout: int, flush_timeout: int) -> None:
+        self.rip.set_timers(update_interval, invalid_timeout, hold_down_timeout, flush_timeout)
 
     def set_arp_timers(self, entry_lifetime: int, request_timeout: int) -> None:
         self.arp.set_timers(entry_lifetime, request_timeout)

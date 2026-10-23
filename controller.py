@@ -3,6 +3,7 @@ from collections.abc import Iterable
 
 from router import Router, RouterPort
 from RIB import Route, RouteSource
+from RIP import RIPRecord
 
 
 class Controller:
@@ -91,6 +92,26 @@ class Controller:
 
     def get_arp_timers(self) -> tuple[int, int]:
         return self.router.get_arp_timers()
+
+    def get_rip_timers(self) -> tuple[int, int, int, int]:
+        return self.router.get_rip_timers()
+
+    def get_rip_database(self) -> dict[IPv4Network, RIPRecord]:
+        return self.router.get_rip_database()
+
+    def set_rip_timers(self, update_interval: str, invalid_timeout: str, hold_down_timeout: str, flush_timeout: str) -> None:
+        try:
+            update = int(update_interval.strip())
+            invalid = int(invalid_timeout.strip())
+            hold_down = int(hold_down_timeout.strip())
+            flush = int(flush_timeout.strip())
+        except ValueError as exc:
+            raise ValueError("Enter whole seconds for RIP timers.") from exc
+        if update <= 0 or invalid <= 0 or flush <= 0 or hold_down < 0:
+            raise ValueError("Update, Invalid and Flush must be positive. Hold-down may be zero.")
+        if flush < invalid:
+            raise ValueError("Flush must be greater than or equal to Invalid.")
+        self.router.set_rip_timers(update, invalid, hold_down, flush)
 
     def set_arp_timers(self, entry_lifetime: str, request_timeout: str) -> None:
         try:

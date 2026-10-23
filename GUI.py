@@ -1,4 +1,6 @@
 import tkinter as tk
+from math import ceil
+from time import monotonic
 from tkinter import messagebox, ttk
 
 from controller import Controller
@@ -26,11 +28,17 @@ class GUI:
         entry_lifetime, request_timeout = controller.get_arp_timers()
         self.arp_entry_lifetime = tk.StringVar(self.root, value=str(entry_lifetime))
         self.arp_request_timeout = tk.StringVar(self.root, value=str(request_timeout))
+        update, invalid, hold_down, flush = controller.get_rip_timers()
+        self.rip_update_interval = tk.StringVar(self.root, value=str(update))
+        self.rip_invalid_timeout = tk.StringVar(self.root, value=str(invalid))
+        self.rip_hold_down_timeout = tk.StringVar(self.root, value=str(hold_down))
+        self.rip_flush_timeout = tk.StringVar(self.root, value=str(flush))
         self._static_routes = {}
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=12)
-        for title, build in (("Interfaces", self._build_interfaces), ("Routing", self._build_routing), ("ARP", self._build_arp)):
+        for title, build in (("Interfaces", self._build_interfaces), ("Routing", self._build_routing),
+                             ("ARP", self._build_arp), ("RIP", self._build_rip)):
             tab = ttk.Frame(self.notebook, padding=12)
             self.notebook.add(tab, text=title)
             build(tab)
@@ -92,6 +100,23 @@ class GUI:
         ttk.Entry(form, textvariable=self.static_AD, width=7).grid(row=1, column=3, padx=(0, 12))
         ttk.Button(form, text="Add route", command=self._add_static_route).grid(row=1, column=4)
         ttk.Button(parent, text="Delete selected static route", command=self._remove_static_route).pack(anchor="w", pady=(10, 0))
+
+    def _build_rip(self, parent) -> None:
+        ttk.Label(parent, text="RIP timers", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        form = ttk.Frame(parent)
+        form.pack(anchor="w", pady=(12, 0))
+        fields = (("Update (s)", self.rip_update_interval), ("Invalid (s)", self.rip_invalid_timeout),
+                  ("Hold-down (s)", self.rip_hold_down_timeout), ("Flush (s)", self.rip_flush_timeout))
+        for column, (label, variable) in enumerate(fields):
+            ttk.Label(form, text=label).grid(row=0, column=column, sticky="w")
+            ttk.Entry(form, textvariable=variable, width=15).grid(row=1, column=column, padx=(0, 12))
+        ttk.Button(form, text="Apply RIP timers", command=self._apply_rip_timers).grid(row=1, column=4)
+        ttk.Label(parent, text="RIP database", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(18, 0))
+        self.rip_table = self._make_table(parent, (
+            ("network", "Network", 165), ("metric", "Metric", 60), ("next_hop", "Next hop", 130),
+            ("advertiser", "Advertiser", 130), ("interface", "Interface", 80), ("age", "Age (s)", 85),
+            ("hold_down", "Hold-down (s)", 110), ("tag", "Tag", 55),
+        ))
 
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
@@ -170,6 +195,7 @@ class GUI:
             self.rip_enabled.set(ports[selected].rip_enabled)
         self._refresh_routes()
         self._refresh_arp()
+        self._refresh_rip_database()
 
     def _refresh_routes(self) -> None:
         selected = sorted(self.controller.get_selected_routes(),
@@ -195,6 +221,20 @@ class GUI:
         rows = {f"{port_index}:{ip}": (f"Fa{port_index}", ip, mac, age)
                 for port_index, ip, mac, age in self.controller.get_arp_table()}
         self._sync_table(self.arp_table, rows)
+
+    def _refresh_rip_database(self) -> None:
+        database = self.controller.get_rip_database()
+        _, _, hold_down_timeout, _ = self.controller.get_rip_timers()
+        now = monotonic()
+        rows = {}
+        for network, record in sorted(database.items(), key=lambda item: (int(item[0].network_address), item[0].prefixlen)):
+            age = int(now - record.updated_at)
+            remaining = 0
+            if record.hold_down_started_at is not None:
+                remaining = max(0, ceil(hold_down_timeout - (now - record.hold_down_started_at)))
+            rows[str(network)] = (network, record.metric, record.next_hop, record.advertiser_ip,
+                                  f"Fa{record.learned_port.index}", age, remaining if remaining else "-", record.tag)
+        self._sync_table(self.rip_table, rows)
 
     def _apply(self) -> None:
         port_idx = self._selected_port_idx()
@@ -281,6 +321,19 @@ class GUI:
     def _clear_arp(self) -> None:
         self.controller.clear_arp()
         self._refresh_arp()
+
+    def _apply_rip_timers(self) -> None:
+        try:
+            self.controller.set_rip_timers(self.rip_update_interval.get(), self.rip_invalid_timeout.get(),
+                                           self.rip_hold_down_timeout.get(), self.rip_flush_timeout.get())
+        except ValueError as exc:
+            messagebox.showerror("RIP timers", str(exc))
+            return
+        update, invalid, hold_down, flush = self.controller.get_rip_timers()
+        self.rip_update_interval.set(str(update))
+        self.rip_invalid_timeout.set(str(invalid))
+        self.rip_hold_down_timeout.set(str(hold_down))
+        self.rip_flush_timeout.set(str(flush))
 
     def _apply_arp_timers(self) -> None:
         try:
