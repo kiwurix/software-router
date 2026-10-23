@@ -28,11 +28,11 @@ class GUI:
         entry_lifetime, request_timeout = controller.get_arp_timers()
         self.arp_entry_lifetime = tk.StringVar(self.root, value=str(entry_lifetime))
         self.arp_request_timeout = tk.StringVar(self.root, value=str(request_timeout))
-        update, invalid, hold_down, flush = controller.get_rip_timers()
-        self.rip_update_interval = tk.StringVar(self.root, value=str(update))
-        self.rip_invalid_timeout = tk.StringVar(self.root, value=str(invalid))
-        self.rip_hold_down_timeout = tk.StringVar(self.root, value=str(hold_down))
-        self.rip_flush_timeout = tk.StringVar(self.root, value=str(flush))
+        timers = controller.get_rip_timers()
+        self.rip_update_interval = tk.StringVar(self.root, value=str(timers.update))
+        self.rip_invalid_timeout = tk.StringVar(self.root, value=str(timers.invalid))
+        self.rip_hold_down_timeout = tk.StringVar(self.root, value=str(timers.hold_down))
+        self.rip_flush_timeout = tk.StringVar(self.root, value=str(timers.flush))
         self._static_routes = {}
 
         self.notebook = ttk.Notebook(self.root)
@@ -224,14 +224,14 @@ class GUI:
 
     def _refresh_rip_database(self) -> None:
         database = self.controller.get_rip_database()
-        _, _, hold_down_timeout, _ = self.controller.get_rip_timers()
+        timers = self.controller.get_rip_timers()
         now = monotonic()
         rows = {}
         for network, record in sorted(database.items(), key=lambda item: (int(item[0].network_address), item[0].prefixlen)):
             age = int(now - record.updated_at)
             remaining = 0
             if record.hold_down_started_at is not None:
-                remaining = max(0, ceil(hold_down_timeout - (now - record.hold_down_started_at)))
+                remaining = max(0, ceil(timers.hold_down - (now - record.hold_down_started_at)))
             rows[str(network)] = (network, record.metric, record.next_hop, record.advertiser_ip,
                                   f"Fa{record.learned_port.index}", age, remaining if remaining else "-", record.tag)
         self._sync_table(self.rip_table, rows)
@@ -329,11 +329,11 @@ class GUI:
         except ValueError as exc:
             messagebox.showerror("RIP timers", str(exc))
             return
-        update, invalid, hold_down, flush = self.controller.get_rip_timers()
-        self.rip_update_interval.set(str(update))
-        self.rip_invalid_timeout.set(str(invalid))
-        self.rip_hold_down_timeout.set(str(hold_down))
-        self.rip_flush_timeout.set(str(flush))
+        timers = self.controller.get_rip_timers()
+        self.rip_update_interval.set(str(timers.update))
+        self.rip_invalid_timeout.set(str(timers.invalid))
+        self.rip_hold_down_timeout.set(str(timers.hold_down))
+        self.rip_flush_timeout.set(str(timers.flush))
 
     def _apply_arp_timers(self) -> None:
         try:

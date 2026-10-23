@@ -1,9 +1,10 @@
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, ip_network
 from collections.abc import Iterable
 
-from router import Router, RouterPort
+from router import Router
 from RIB import Route, RouteSource
 from RIP import RIPRecord
+from models import RIPTimers, RouterPort
 
 
 class Controller:
@@ -15,7 +16,7 @@ class Controller:
     def ports(self) -> tuple[RouterPort, ...]:
         return self.router.ports
 
-    def set_address(self, port_index: int, address: str, netmask: str) -> IPv4Interface:
+    def set_address(self, port_index: int, address: str, netmask: str) -> None:
         self._check_port(port_index)
         try:
             ip = IPv4Address(address.strip())
@@ -37,7 +38,6 @@ class Controller:
         ):
             raise ValueError("Another router interface already uses this IP address.")
         self.router.set_address(port_index, ipv4)
-        return ipv4
 
     def clear_address(self, port_index: int) -> None:
         self._check_port(port_index)
@@ -47,8 +47,8 @@ class Controller:
         self._check_port(port_index)
         self.router.set_rip_enabled(port_index, enabled)
 
-    def add_static_route(self, network: str, port_index: int | None = None,
-                         next_hop: str = "", AD: str = "1") -> Route:
+    def add_static_route(self, network: str, port_index: int | None,
+                         next_hop: str, AD: str) -> Route:
         try:
             destination = IPv4Network(network.strip())
             neighbour = IPv4Address(next_hop.strip()) if next_hop.strip() else None
@@ -93,7 +93,7 @@ class Controller:
     def get_arp_timers(self) -> tuple[int, int]:
         return self.router.get_arp_timers()
 
-    def get_rip_timers(self) -> tuple[int, int, int, int]:
+    def get_rip_timers(self) -> RIPTimers:
         return self.router.get_rip_timers()
 
     def get_rip_database(self) -> dict[IPv4Network, RIPRecord]:
@@ -111,7 +111,7 @@ class Controller:
             raise ValueError("Update, Invalid and Flush must be positive. Hold-down may be zero.")
         if flush < invalid:
             raise ValueError("Flush must be greater than or equal to Invalid.")
-        self.router.set_rip_timers(update, invalid, hold_down, flush)
+        self.router.set_rip_timers(RIPTimers(update, invalid, hold_down, flush))
 
     def set_arp_timers(self, entry_lifetime: str, request_timeout: str) -> None:
         try:

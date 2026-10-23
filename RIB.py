@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from _thread import RLock
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
-from typing import TYPE_CHECKING
 
-
-if TYPE_CHECKING:
-    from router import RouterPort
+from FIB import FIB, lookup_network
+from models import FIBEntry, RouterPort
 
 
 class RouteSource(StrEnum):
@@ -32,10 +31,11 @@ class Route:
 
 
 class RIB:
-    def __init__(self, lock) -> None:
+    def __init__(self, fib: FIB, lock: RLock) -> None:
         self._candidates: dict[IPv4Network, list[Route]] = {}
         self._selected: dict[IPv4Network, Route] = {}
         self._lock = lock
+        self._fib = fib
 
     @staticmethod
     def _rib_update(func):
@@ -83,16 +83,6 @@ class RIB:
         self.remove_route(old, update=False)
         self.add_route(new, update=False)
 
-    def lookup(self, ip: IPv4Address) -> Route | None:
-        with self._lock:
-            routes_by_network = self._selected
-        return self._lookup(ip, routes_by_network)
-
-    def resolve(self, ip: IPv4Address) -> tuple[RouterPort, IPv4Address] | None:
-        with self._lock:
-            routes_by_network = self._selected
-        return self._resolve(ip, routes_by_network)
-
     def get_selected_routes(self) -> tuple[Route, ...]:
         with self._lock:
             return tuple(self._selected.values())
@@ -136,19 +126,30 @@ class RIB:
                         changed = True
                         break
             self._selected = selected
+            self._fib.replace(self._resolve_selected_routes())
+
+    def _resolve_selected_routes(self) -> dict[IPv4Network, FIBEntry]:
+        entries = {}
+        for network, route in self._selected.items():
+            if route.output_port is not None:
+                entries[network] = FIBEntry(route.output_port, route.next_hop)
+            else:
+                resolved = self._resolve(route.next_hop, self._selected)
+                if resolved is not None:
+                    output_port, next_hop = resolved
+                    entries[network] = FIBEntry(output_port, next_hop)
+        return entries
 
     @staticmethod
     def _lookup(ip: IPv4Address, routes_by_network: dict[IPv4Network, Route]) -> Route | None:
-        for prefix_length in range(32, -1, -1):
-            route = routes_by_network.get(IPv4Network((ip, prefix_length), strict=False))
-            if route is not None:
-                return route
-        return None
+        network = lookup_network(ip, routes_by_network)
+        return routes_by_network[network] if network is not None else None
 
-    def _resolve(self, ip: IPv4Address, routes_by_network: dict[IPv4Network, Route]) -> tuple[RouterPort, IPv4Address] | None:
+    @staticmethod
+    def _resolve(ip: IPv4Address, routes_by_network: dict[IPv4Network, Route]) -> tuple[RouterPort, IPv4Address] | None:
         visited: set[IPv4Network] = set()
         while True:
-            route = self._lookup(ip, routes_by_network)
+            route = RIB._lookup(ip, routes_by_network)
             if route is None or route.network in visited:
                 return None
             visited.add(route.network)

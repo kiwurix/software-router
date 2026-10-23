@@ -1,3 +1,4 @@
+from _thread import RLock
 from ipaddress import IPv4Address
 from time import monotonic
 
@@ -6,9 +7,9 @@ from scapy.packet import Packet
 
 
 class ArpManager:
-    def __init__(self, lock, entry_lifetime: int = 300, request_timeout: int = 5) -> None:
-        self.entry_lifetime = entry_lifetime
-        self.request_timeout = request_timeout
+    def __init__(self, lock: RLock) -> None:
+        self.entry_lifetime = 300
+        self.request_timeout = 5
         self._cache: dict[tuple[int, IPv4Address], tuple[str, float]] = {}
         self._pending_requests: dict[tuple[int, IPv4Address], float] = {}
         self._lock = lock

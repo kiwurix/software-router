@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from _thread import RLock
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from ipaddress import IPv4Address, IPv4Network
 from random import randint
 from time import monotonic
-from typing import TYPE_CHECKING
 
 from scapy.interfaces import NetworkInterface
 from scapy.layers.inet import IP, UDP
@@ -15,9 +15,7 @@ from scapy.layers.rip import RIP as RIPBase, RIPEntry
 from scapy.packet import Packet
 
 from RIB import RIB, Route, RouteSource
-
-if TYPE_CHECKING:
-    from router import RouterPort
+from models import RIPTimers, RouterPort
 
 
 @dataclass
@@ -40,24 +38,21 @@ class RIPAdvertisement:
 
 class RIP:
     def __init__(self, ports: list[RouterPort], rib: RIB,
-                 send_frame: Callable[[Packet, NetworkInterface], bool], lock) -> None:
+                 send_frame: Callable[[Packet, NetworkInterface], bool], lock: RLock) -> None:
         self._ports = ports
         self._rib = rib
         self._send_frame = send_frame
         self._database: dict[IPv4Network, RIPRecord] = {}
         self._changed_advertisements: dict[IPv4Network, RIPAdvertisement] = {}
-        self._update_interval = 30
-        self._invalid_timeout = 180
-        self._hold_down_timeout = 180
-        self._flush_timeout = 240
+        self._timers = RIPTimers()
         self._update_started_at = monotonic()
         self._trigger_started_at: float | None = None
         self._trigger_delay = 0
         self._lock = lock
 
-    def get_timers(self) -> tuple[int, int, int, int]:
+    def get_timers(self) -> RIPTimers:
         with self._lock:
-            return self._update_interval, self._invalid_timeout, self._hold_down_timeout, self._flush_timeout
+            return self._timers
 
     def get_database(self) -> dict[IPv4Network, RIPRecord]:
         with self._lock:
@@ -72,11 +67,8 @@ class RIP:
         return wrapper
 
     @_locked
-    def set_timers(self, update_interval: int, invalid_timeout: int, hold_down_timeout: int, flush_timeout: int) -> None:
-        self._update_interval = update_interval
-        self._invalid_timeout = invalid_timeout
-        self._hold_down_timeout = hold_down_timeout
-        self._flush_timeout = flush_timeout
+    def set_timers(self, timers: RIPTimers) -> None:
+        self._timers = timers
 
     @contextmanager
     def advertise_changes(self):
@@ -111,7 +103,7 @@ class RIP:
     def _handle_request(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
         if len(entries) == 1 and entries[0].AF == 0 and entries[0].metric == 16:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
-            self.send_response([port], advertisements, reply_to=frame)
+            self._send_response([port], advertisements, reply_to=frame)
 
     def _handle_response(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
         advertiser_ip = IPv4Address(frame[IP].src)
@@ -136,7 +128,7 @@ class RIP:
 
             if old_record is not None:
                 if (old_record.hold_down_started_at is not None and
-                        now - old_record.hold_down_started_at < self._hold_down_timeout):
+                        now - old_record.hold_down_started_at < self._timers.hold_down):
                         continue
                 if old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric:
                     continue
@@ -177,28 +169,43 @@ class RIP:
 
     @_locked
     def update_timers(self) -> None:
-        before = self._get_advertisement_data()
+        before = None
         now = monotonic()
         rib_changed = False
         for network, record in tuple(self._database.items()):
             elapsed = now - record.updated_at
-            if elapsed >= self._flush_timeout:
+
+            flush_needed = elapsed >= self._timers.flush
+            invalidation_needed = not flush_needed and elapsed >= self._timers.invalid and record.metric < 16
+
+            if not (flush_needed or invalidation_needed):
+                continue
+
+            if before is None:
+                before = self._get_advertisement_data()
+
+            if flush_needed:
                 if record.metric < 16 or record.hold_down_started_at is not None:
                     self._rib.remove_route(self._build_rib_route(network, record), update=False)
                     rib_changed = True
+
                 del self._database[network]
-            elif elapsed >= self._invalid_timeout and record.metric < 16:
+
+            elif invalidation_needed:
                 old_route = self._build_rib_route(network, record)
                 record.metric = 16
                 record.hold_down_started_at = now
                 self._rib.replace_route(old_route, self._build_rib_route(network, record), update=False)
                 rib_changed = True
 
-        if rib_changed:
-            self._rib.rebuild_selected()
-        self._detect_and_advertise_changes(before)
+        if before is None:
+            self._send_update()
+        else:
+            if rib_changed:
+                self._rib.rebuild_selected()
+            self._detect_and_advertise_changes(before)
 
-    def invalidate_port_routes(self, port: RouterPort, *, update=True) -> None:
+    def invalidate_port_routes(self, port: RouterPort, *, update: bool = True) -> None:
         rib_changed = False
         for network, record in self._database.items():
             if record.learned_port is not port:
@@ -255,13 +262,12 @@ class RIP:
                 ))
         return advertisement_data
 
-    def send_request(self, ports: list[RouterPort]) -> None:
-        entries = [RIPEntry(AF=0, metric=16)]
-        for port in ports:
-            if port.rip_enabled and port.ipv4 is not None:
-                self._send_frame(self._build_frame(port, entries, command=1), port.device)
+    def send_request(self, port: RouterPort) -> None:
+        if port.rip_enabled and port.ipv4 is not None:
+            entries = [RIPEntry(AF=0, metric=16)]
+            self._send_frame(self._build_frame(port, entries, command=1), port.device)
 
-    def send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
+    def _send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
                       reply_to: Packet | None = None) -> bool:
         frames = []
         for port in ports:
@@ -306,9 +312,9 @@ class RIP:
 
     def _send_update(self) -> None:
         now = monotonic()
-        if now - self._update_started_at >= self._update_interval:
+        if now - self._update_started_at >= self._timers.update:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
-            if self.send_response(self._ports, advertisements):
+            if self._send_response(self._ports, advertisements):
                 self._changed_advertisements.clear()
                 self._update_started_at = now
             return
@@ -316,7 +322,7 @@ class RIP:
             return
         if self._trigger_started_at is not None and now - self._trigger_started_at < self._trigger_delay:
             return
-        if self.send_response(self._ports, self._changed_advertisements):
+        if self._send_response(self._ports, self._changed_advertisements):
             self._changed_advertisements.clear()
             self._trigger_started_at = now
             self._trigger_delay = randint(1, 5)

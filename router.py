@@ -1,5 +1,4 @@
 import logging
-from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 from threading import RLock, Thread
 from time import sleep
@@ -12,17 +11,10 @@ from scapy.sendrecv import AsyncSniffer, sendp
 from scapy.utils import checksum
 
 from arp_manager import ArpManager
+from FIB import FIB
 from RIB import RIB, Route
 from RIP import RIP, RIPRecord
-
-
-@dataclass
-class RouterPort:
-    index: int
-    device: NetworkInterface
-    mac: str
-    ipv4: IPv4Interface | None = None
-    rip_enabled: bool = False
+from models import RIPTimers, RouterPort
 
 
 class Router:
@@ -32,7 +24,8 @@ class Router:
         ]
         self._own_macs = frozenset(port.mac for port in self._ports)
         self._lock = RLock()
-        self.rib = RIB(self._lock)
+        self.fib = FIB(self._lock)
+        self.rib = RIB(self.fib, self._lock)
         self.rip = RIP(self._ports, self.rib, self._send_frame, self._lock)
         self.arp = ArpManager(lock=self._lock)
         self._pending_packets: dict[tuple[int, IPv4Address], list[IP]] = {}
@@ -67,7 +60,7 @@ class Router:
 
     def _run_timers(self) -> None:
         while self._timers_running:
-            self.update_timers()
+            self._update_timers()
             sleep(1)
 
     def _handle_frame(self, frame: Packet) -> None:
@@ -135,7 +128,7 @@ class Router:
 
         if arp_packet.op == 1:
             if dst_ip != port.ipv4.ip:
-                resolved = self.rib.resolve(dst_ip)
+                resolved = self.fib.lookup(dst_ip)
                 if resolved is None or resolved[0] is port:
                     return
 
@@ -161,7 +154,7 @@ class Router:
             if self._is_local_ip(dst_ip):
                 return
 
-            resolved = self.rib.resolve(dst_ip)
+            resolved = self.fib.lookup(dst_ip)
             if resolved is None:
                 return
 
@@ -179,15 +172,15 @@ class Router:
                     )
 
         if dst_mac is not None:
-            self._send_ipv4(packet, port.device, port.mac, dst_mac)
+            self._send_ipv4(packet, port, dst_mac)
         elif request is not None:
             self._send_frame(request, port.device)
 
 
-    def _send_ipv4(self, packet: IP, device: NetworkInterface, src_mac: str, dst_mac: str) -> None:
+    def _send_ipv4(self, packet: IP, port: RouterPort, dst_mac: str) -> None:
         packet.ttl -= 1
         del packet.chksum
-        self._send_frame(Ether(src=src_mac, dst=dst_mac) / packet, device)
+        self._send_frame(Ether(src=port.mac, dst=dst_mac) / packet, port.device)
 
     @staticmethod
     def _send_frame(frame: Packet, device: NetworkInterface) -> bool:
@@ -212,7 +205,7 @@ class Router:
                 self.rip.invalidate_port_routes(port, update=False)
                 port.ipv4 = ipv4
                 self.rib.update_port_routes(port)
-            self.rip.send_request([port])
+            self.rip.send_request(port)
             self.arp.clear_port(port_index)
             self._pending_packets = {key: packets for key, packets in self._pending_packets.items() if key[0] != port_index}
 
@@ -225,9 +218,9 @@ class Router:
                 if not enabled:
                     self.rip.invalidate_port_routes(port)
                 port.rip_enabled = enabled
-            self.rip.send_request([port])
+            self.rip.send_request(port)
 
-    def update_timers(self) -> None:
+    def _update_timers(self) -> None:
         with self._lock:
             expired = self.arp.update_timers()
             for key in expired:
@@ -243,31 +236,28 @@ class Router:
             self.rib.remove_route(route)
 
     def get_selected_routes(self) -> tuple[Route, ...]:
-        with self._lock:
-            return self.rib.get_selected_routes()
+        return self.rib.get_selected_routes()
 
     def get_static_routes(self) -> tuple[Route, ...]:
-        with self._lock:
-            return self.rib.get_static_routes()
+        return self.rib.get_static_routes()
 
     def get_arp_table(self) -> list[tuple[int, IPv4Address, str, int]]:
         return self.arp.get_table()
 
     def remove_arp_entry(self, port_index: int, ip: IPv4Address) -> None:
-        with self._lock:
-            self.arp.remove_entry(port_index, ip)
+        self.arp.remove_entry(port_index, ip)
 
     def get_arp_timers(self) -> tuple[int, int]:
         return self.arp.get_timers()
 
-    def get_rip_timers(self) -> tuple[int, int, int, int]:
+    def get_rip_timers(self) -> RIPTimers:
         return self.rip.get_timers()
 
     def get_rip_database(self) -> dict[IPv4Network, RIPRecord]:
         return self.rip.get_database()
 
-    def set_rip_timers(self, update_interval: int, invalid_timeout: int, hold_down_timeout: int, flush_timeout: int) -> None:
-        self.rip.set_timers(update_interval, invalid_timeout, hold_down_timeout, flush_timeout)
+    def set_rip_timers(self, timers: RIPTimers) -> None:
+        self.rip.set_timers(timers)
 
     def set_arp_timers(self, entry_lifetime: int, request_timeout: int) -> None:
         self.arp.set_timers(entry_lifetime, request_timeout)
