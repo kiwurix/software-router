@@ -1,4 +1,3 @@
-from _thread import RLock
 from collections.abc import Collection
 from ipaddress import IPv4Address, IPv4Network
 
@@ -14,17 +13,14 @@ def lookup_network(ip: IPv4Address, networks: Collection[IPv4Network]) -> IPv4Ne
 
 
 class FIB:
-    def __init__(self, lock: RLock) -> None:
+    def __init__(self) -> None:
         self._entries: dict[IPv4Network, FIBEntry] = {}
-        self._lock = lock
 
     def replace(self, entries: dict[IPv4Network, FIBEntry]) -> None:
-        with self._lock:
-            self._entries = entries
+        self._entries = entries
 
     def lookup(self, ip: IPv4Address) -> tuple[RouterPort, IPv4Address] | None:
-        with self._lock:
-            entries = self._entries
+        entries = self._entries
         network = lookup_network(ip, entries)
         if network is None:
             return None

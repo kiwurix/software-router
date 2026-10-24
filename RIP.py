@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from _thread import RLock
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -38,7 +37,7 @@ class RIPAdvertisement:
 
 class RIP:
     def __init__(self, ports: list[RouterPort], rib: RIB,
-                 send_frame: Callable[[Packet, NetworkInterface], bool], lock: RLock) -> None:
+                 send_frame: Callable[[Packet, NetworkInterface], bool]) -> None:
         self._ports = ports
         self._rib = rib
         self._send_frame = send_frame
@@ -48,37 +47,23 @@ class RIP:
         self._update_started_at = monotonic()
         self._trigger_started_at: float | None = None
         self._trigger_delay = 0
-        self._lock = lock
 
     def get_timers(self) -> RIPTimers:
-        with self._lock:
-            return self._timers
+        return self._timers
 
     def get_database(self) -> dict[IPv4Network, RIPRecord]:
-        with self._lock:
-            return {network: replace(record) for network, record in self._database.items()}
+        return {network: replace(record) for network, record in self._database.items()}
 
-    @staticmethod
-    def _locked(func):
-        def wrapper(self, *args, **kwargs):
-            with self._lock:
-                func(self, *args, **kwargs)
-
-        return wrapper
-
-    @_locked
     def set_timers(self, timers: RIPTimers) -> None:
         self._timers = timers
 
     @contextmanager
     def advertise_changes(self):
-        with self._lock:
-            before = self._get_advertisement_data()
-            yield
-            self._detect_and_advertise_changes(before)
+        before = self._get_advertisement_data()
+        yield
+        self._detect_and_advertise_changes(before)
 
-    @_locked
-    def handle(self, port: RouterPort, frame: Packet) -> None:
+    def handle(self, port: RouterPort, frame: Ether) -> None:
         if not port.rip_enabled:
             return
 
@@ -100,12 +85,12 @@ class RIP:
         elif message.cmd == 2:
             self._handle_response(port, frame, entries)
 
-    def _handle_request(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
+    def _handle_request(self, port: RouterPort, frame: Ether, entries: list[RIPEntry]) -> None:
         if len(entries) == 1 and entries[0].AF == 0 and entries[0].metric == 16:
             advertisements = self._changed_advertisements | self._get_advertisement_data()
             self._send_response([port], advertisements, reply_to=frame)
 
-    def _handle_response(self, port: RouterPort, frame: Packet, entries: list[RIPEntry]) -> None:
+    def _handle_response(self, port: RouterPort, frame: Ether, entries: list[RIPEntry]) -> None:
         advertiser_ip = IPv4Address(frame[IP].src)
         
         if frame[UDP].sport != 520 or advertiser_ip not in port.ipv4.network:
@@ -167,7 +152,6 @@ class RIP:
             self._rib.rebuild_selected()
         self._detect_and_advertise_changes(before)
 
-    @_locked
     def update_timers(self) -> None:
         before = None
         now = monotonic()
@@ -268,7 +252,7 @@ class RIP:
             self._send_frame(self._build_frame(port, entries, command=1), port.device)
 
     def _send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
-                      reply_to: Packet | None = None) -> bool:
+                      reply_to: Ether | None = None) -> bool:
         frames = []
         for port in ports:
             if not port.rip_enabled or port.ipv4 is None:
@@ -294,7 +278,7 @@ class RIP:
 
     @staticmethod
     def _build_frame(port: RouterPort, entries: list[RIPEntry], command: int,
-                     reply_to: Packet | None = None) -> Packet:
+                     reply_to: Ether | None = None) -> Ether:
         if reply_to is None:
             dst_mac, dst_ip, dst_port = "01:00:5e:00:00:09", "224.0.0.9", 520
         else:

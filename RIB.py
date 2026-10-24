@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from _thread import RLock
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
@@ -31,21 +30,17 @@ class Route:
 
 
 class RIB:
-    def __init__(self, fib: FIB, lock: RLock) -> None:
+    def __init__(self, fib: FIB) -> None:
         self._candidates: dict[IPv4Network, list[Route]] = {}
         self._selected: dict[IPv4Network, Route] = {}
-        self._lock = lock
         self._fib = fib
 
     @staticmethod
     def _rib_update(func):
         def wrapper(self, *args, update=True, **kwargs):
+            func(self, *args, **kwargs)
             if update:
-                with self._lock:
-                    func(self, *args, **kwargs)
-                    self.rebuild_selected()
-            else:
-                func(self, *args, **kwargs)
+                self.rebuild_selected()
 
         return wrapper
 
@@ -84,49 +79,46 @@ class RIB:
         self.add_route(new, update=False)
 
     def get_selected_routes(self) -> tuple[Route, ...]:
-        with self._lock:
-            return tuple(self._selected.values())
+        return tuple(self._selected.values())
 
     def get_static_routes(self) -> tuple[Route, ...]:
-        with self._lock:
-            return tuple(route for candidates in self._candidates.values()
-                         for route in candidates if route.source == RouteSource.STATIC)
+        return tuple(route for candidates in self._candidates.values()
+                     for route in candidates if route.source == RouteSource.STATIC)
 
     def rebuild_selected(self) -> None:
-        with self._lock:
-            ordered_candidates = {}
-            for network, candidates in self._candidates.items():
-                available = []
-                for route in candidates:
-                    if route.possibly_down or (route.output_port is not None and route.output_port.ipv4 is None):
-                        continue
+        ordered_candidates = {}
+        for network, candidates in self._candidates.items():
+            available = []
+            for route in candidates:
+                if route.possibly_down or (route.output_port is not None and route.output_port.ipv4 is None):
+                    continue
 
-                    available.append(route)
-                ordered_candidates[network] = sorted(available, key=lambda candidate: (candidate.AD, candidate.metric))
+                available.append(route)
+            ordered_candidates[network] = sorted(available, key=lambda candidate: (candidate.AD, candidate.metric))
 
-            selected: dict[IPv4Network, Route] = {}
+        selected: dict[IPv4Network, Route] = {}
+        for network, candidates in ordered_candidates.items():
+            for route in candidates:
+                if route.source == RouteSource.CONNECTED:
+                    selected[network] = route
+                    break
+
+        changed = True
+        while changed:
+            changed = False
             for network, candidates in ordered_candidates.items():
+                previous = selected.get(network)
                 for route in candidates:
-                    if route.source == RouteSource.CONNECTED:
-                        selected[network] = route
+                    if route is previous:
                         break
-
-            changed = True
-            while changed:
-                changed = False
-                for network, candidates in ordered_candidates.items():
-                    previous = selected.get(network)
-                    for route in candidates:
-                        if route is previous:
-                            break
-                        updated = selected | {network: route}
-                        if route.output_port is None and self._resolve(route.next_hop, updated) is None:
-                            continue
-                        selected = updated
-                        changed = True
-                        break
-            self._selected = selected
-            self._fib.replace(self._resolve_selected_routes())
+                    updated = selected | {network: route}
+                    if route.output_port is None and self._resolve(route.next_hop, updated) is None:
+                        continue
+                    selected = updated
+                    changed = True
+                    break
+        self._selected = selected
+        self._fib.replace(self._resolve_selected_routes())
 
     def _resolve_selected_routes(self) -> dict[IPv4Network, FIBEntry]:
         entries = {}
