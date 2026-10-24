@@ -11,6 +11,7 @@ from scapy.sendrecv import AsyncSniffer, sendp
 from scapy.utils import checksum
 
 from arp_manager import ArpManager
+from DHCP import DHCPManger
 from FIB import FIB
 from RIB import RIB, Route
 from RIP import RIP, RIPRecord
@@ -29,6 +30,7 @@ class Router:
         self.rib = RIB(self.fib)
         self.rip = RIP(self._ports, self.rib, self._send_frame)
         self.arp = ArpManager()
+        self.dhcp = DHCPManger()
         self._pending_packets: dict[tuple[int, IPv4Address], list[IP]] = {}
         self._sniffer: AsyncSniffer | None = None
         self._timers_running = False
@@ -95,6 +97,12 @@ class Router:
         local_ip = self._is_local_ip(IPv4Address(packet.dst))
         if isinstance(packet.payload, UDP):
             udp = packet.payload
+            if (udp.sport == 68 and udp.dport == 67
+                    and (local_mac or dst_mac == "ff:ff:ff:ff:ff:ff")
+                    and packet.dst in (str(port.ipv4.ip), "255.255.255.255")):
+                self.dhcp.handle(port, udp)
+                return
+
             if udp.dport == 520 and (local_mac and local_ip or
                     dst_mac == "01:00:5e:00:00:09" and packet.dst == "224.0.0.9"):
                 self.rip.handle(port, frame)
