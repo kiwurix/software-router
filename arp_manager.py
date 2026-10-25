@@ -10,7 +10,7 @@ from models import RouterPort
 class ARPManager:
     def __init__(self) -> None:
         self._entry_lifetime = 300
-        self._request_timeout = 5
+        self._request_timeout = 2
         self._cache: dict[tuple[int, IPv4Address], tuple[str, float]] = {}
         self._pending_requests: dict[tuple[int, IPv4Address], float] = {}
 
