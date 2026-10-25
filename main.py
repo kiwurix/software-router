@@ -52,8 +52,8 @@ def main() -> None:
     devices, os_ipv4_addresses = _discover_devices()
     router = Router(devices)
     controller = Controller(router, os_ipv4_addresses)
-    router.start()
     try:
+        router.start()
         GUI(controller).show()
     finally:
         router.stop()

@@ -8,7 +8,8 @@ from scapy.interfaces import NetworkInterface
 from scapy.layers.inet import ICMP, IP, UDP
 from scapy.layers.l2 import ARP, Ether
 from scapy.packet import Packet
-from scapy.sendrecv import AsyncSniffer, sendp
+from scapy.sendrecv import AsyncSniffer
+from scapy.supersocket import SuperSocket
 from scapy.utils import checksum
 
 from arp_manager import ARPManager
@@ -34,6 +35,7 @@ class Router:
         ]
         self._own_macs = frozenset(port.mac for port in self._ports)
         self._lock = RLock()
+        self._send_sockets: dict[int, SuperSocket] = {}
         self._fib = FIB()
         self._rib = RIB(self._fib)
         self._rip = RIPManager(self._ports, self._rib, self._send_frame)
@@ -47,6 +49,9 @@ class Router:
     def start(self) -> None:
         if not self._ports or self._sniffer is not None:
             return
+        for port in self._ports:
+            socket_class = port.device.l2socket()
+            self._send_sockets[port.index] = socket_class(iface=port.device)
         device_name_to_port = {port.device.network_name: port for port in self._ports}
         self._sniffer = AsyncSniffer(
             iface=device_name_to_port,
@@ -68,6 +73,9 @@ class Router:
             if self._timer_thread is not None:
                 self._timer_thread.join()
                 self._timer_thread = None
+            for socket in self._send_sockets.values():
+                socket.close()
+            self._send_sockets.clear()
 
     def _run_timers(self) -> None:
         while self._timers_running:
@@ -204,10 +212,9 @@ class Router:
         del packet.chksum
         self._send_frame(port, Ether(src=port.mac, dst=dst_mac) / packet)
 
-    @staticmethod
-    def _send_frame(port: RouterPort, frame: Packet) -> bool:
+    def _send_frame(self, port: RouterPort, frame: Packet) -> bool:
         try:
-            sendp(frame, iface=port.device, verbose=False)
+            self._send_sockets[port.index].send(frame)
             return True
         except Exception:
             logging.exception("Failed to send frame")
