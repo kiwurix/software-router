@@ -11,12 +11,12 @@ from scapy.packet import Packet
 from scapy.sendrecv import AsyncSniffer, sendp
 from scapy.utils import checksum
 
-from arp_manager import ArpManager
-from DHCP import AllocationType, DHCPManger, DHCPRecord
-from FIB import FIB
-from RIB import RIB, Route
-from RIP import RIP, RIPRecord
+from arp_manager import ARPManager
+from dhcp_manager import DHCPAllocationType, DHCPManager, DHCPRecord
+from fib import FIB
 from models import RIPTimers, RouterPort
+from rib import RIB, Route
+from rip_manager import RIPManager, RIPRecord
 
 
 def _locked(func: Callable):
@@ -36,9 +36,9 @@ class Router:
         self._lock = RLock()
         self._fib = FIB()
         self._rib = RIB(self._fib)
-        self._rip = RIP(self._ports, self._rib, self._send_frame)
-        self._arp = ArpManager()
-        self._dhcp = DHCPManger(self._ports, self._arp, self._send_frame)
+        self._rip = RIPManager(self._ports, self._rib, self._send_frame)
+        self._arp = ARPManager()
+        self._dhcp = DHCPManager(self._ports, self._arp, self._send_frame)
         self._pending_packets: dict[tuple[int, IPv4Address], list[IP]] = {}
         self._sniffer: AsyncSniffer | None = None
         self._timers_running = False
@@ -315,11 +315,11 @@ class Router:
         self._dhcp.clear_pending_probes()
 
     @_locked
-    def get_dhcp_settings(self) -> tuple[AllocationType, int, int]:
+    def get_dhcp_settings(self) -> tuple[DHCPAllocationType, int, int]:
         return self._dhcp.get_settings()
 
     @_locked
-    def set_dhcp_settings(self, allocation_type: AllocationType, offer_timeout: int, lease_time: int) -> None:
+    def set_dhcp_settings(self, allocation_type: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
         self._dhcp.set_settings(allocation_type, offer_timeout, lease_time)
 
     @_locked

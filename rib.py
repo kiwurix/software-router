@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
 
-from FIB import FIB, lookup_network
+from fib import FIB, lookup_network
 from models import FIBEntry, RouterPort
 
 

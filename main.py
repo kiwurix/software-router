@@ -4,8 +4,8 @@ from subprocess import run
 from scapy.arch.windows import get_windows_if_list
 from scapy.interfaces import NetworkInterface, dev_from_index
 
-from GUI import GUI
 from controller import Controller
+from gui import GUI
 from router import Router
 
 

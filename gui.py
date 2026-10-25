@@ -4,8 +4,8 @@ from time import monotonic
 from tkinter import messagebox, ttk
 
 from controller import Controller
-from DHCP import AllocationType
-from RIB import RouteSource
+from dhcp_manager import DHCPAllocationType
+from rib import RouteSource
 
 
 class GUI:
@@ -54,7 +54,7 @@ class GUI:
         self._after_id = self._root.after(1000, self._tick)
 
     @staticmethod
-    def _make_table(parent, columns, selectmode="browse", height=8):
+    def _build_table(parent, columns, selectmode="browse", height=8):
         frame = ttk.Frame(parent)
         frame.pack(fill="both", expand=True, pady=(6, 12))
         table = ttk.Treeview(frame, columns=[key for key, _, _ in columns], show="headings",
@@ -70,7 +70,7 @@ class GUI:
 
     def _build_interfaces(self, parent) -> None:
         ttk.Label(parent, text="Interface IP addresses", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._table = self._make_table(parent, (
+        self._table = self._build_table(parent, (
             ("interface", "Interface", 130), ("mac", "MAC", 180),
             ("ip", "IP address", 140), ("mask", "Subnet mask", 140), ("rip", "RIP", 70),
         ))
@@ -81,19 +81,19 @@ class GUI:
         ttk.Label(form, text="Mask or /prefix").grid(row=0, column=1, sticky="w")
         ttk.Entry(form, textvariable=self._address, width=19).grid(row=1, column=0, padx=(0, 12))
         ttk.Entry(form, textvariable=self._mask, width=19).grid(row=1, column=1, padx=(0, 12))
-        ttk.Button(form, text="Apply address", command=self._apply).grid(row=1, column=2, padx=(0, 8))
-        ttk.Button(form, text="Clear address", command=self._clear).grid(row=1, column=3, padx=(0, 16))
+        ttk.Button(form, text="Apply address", command=self._apply_address).grid(row=1, column=2, padx=(0, 8))
+        ttk.Button(form, text="Clear address", command=self._clear_address).grid(row=1, column=3, padx=(0, 16))
         self._rip_toggle = ttk.Checkbutton(form, text="Enable RIP", variable=self._rip_enabled, command=self._set_rip_enabled)
         self._rip_toggle.grid(row=1, column=4)
 
     def _build_routing(self, parent) -> None:
         ttk.Label(parent, text="Routing table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._routing_table = self._make_table(parent, (
+        self._routing_table = self._build_table(parent, (
             ("code", "Code", 60), ("network", "Network", 220), ("preference", "[AD/Metric]", 130),
             ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
         ), selectmode="none", height=6)
         ttk.Label(parent, text="Static routes configuration", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._static_table = self._make_table(parent, (
+        self._static_table = self._build_table(parent, (
             ("state", "State", 120), ("network", "Network", 220), ("AD", "AD", 70),
             ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
         ), height=6)
@@ -121,7 +121,7 @@ class GUI:
             ttk.Entry(form, textvariable=variable, width=15).grid(row=1, column=column, padx=(0, 12))
         ttk.Button(form, text="Apply RIP timers", command=self._apply_rip_timers).grid(row=1, column=4)
         ttk.Label(parent, text="RIP database", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(18, 0))
-        self._rip_table = self._make_table(parent, (
+        self._rip_table = self._build_table(parent, (
             ("network", "Network", 165), ("metric", "Metric", 60), ("next_hop", "Next hop", 130),
             ("advertiser", "Advertiser", 130), ("interface", "Interface", 80), ("age", "Age (s)", 85),
             ("hold_down", "Hold-down (s)", 110), ("tag", "Tag", 55),
@@ -129,7 +129,7 @@ class GUI:
 
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._arp_table = self._make_table(parent, (
+        self._arp_table = self._build_table(parent, (
             ("interface", "Interface", 100), ("ip", "IP address", 230), ("mac", "MAC address", 230), ("age", "Age (s)", 120),
         ))
         controls = ttk.Frame(parent)
@@ -174,15 +174,15 @@ class GUI:
         self._root.after_cancel(self._after_id)
         self._root.destroy()
 
-    def _selected_port_idx(self) -> int | None:
+    def _selected_port_index(self) -> int | None:
         selected = self._table.selection()
         return int(selected[0]) if selected else None
 
     def _on_select(self, _event: tk.Event | None = None) -> None:
-        port_idx = self._selected_port_idx()
-        if port_idx is None:
+        port_index = self._selected_port_index()
+        if port_index is None:
             return
-        port = self._controller.ports[port_idx]
+        port = self._controller.ports[port_index]
         ipv4 = port.ipv4
         self._address.set(str(ipv4.ip) if ipv4 else "")
         self._mask.set(str(ipv4.network.netmask) if ipv4 else "")
@@ -199,7 +199,7 @@ class GUI:
         if not self._table.selection() and rows:
             self._table.selection_set(next(iter(rows)))
             self._on_select()
-        selected = self._selected_port_idx()
+        selected = self._selected_port_index()
         if selected is not None:
             self._rip_enabled.set(ports[selected].rip_enabled)
         self._refresh_routes()
@@ -248,35 +248,35 @@ class GUI:
                                   f"Fa{record.learned_port.index}", age, remaining if remaining else "-", record.tag)
         self._sync_table(self._rip_table, rows)
 
-    def _apply(self) -> None:
-        port_idx = self._selected_port_idx()
-        if port_idx is None:
+    def _apply_address(self) -> None:
+        port_index = self._selected_port_index()
+        if port_index is None:
             messagebox.showinfo("No interface", "Select an interface first.")
             return
         try:
-            self._controller.set_address(port_idx, self._address.get(), self._mask.get())
+            self._controller.set_address(port_index, self._address.get(), self._mask.get())
         except ValueError as exc:
             messagebox.showerror("Invalid IP configuration", str(exc))
             return
         self._refresh()
         self._on_select()
 
-    def _clear(self) -> None:
-        port_idx = self._selected_port_idx()
-        if port_idx is None:
+    def _clear_address(self) -> None:
+        port_index = self._selected_port_index()
+        if port_index is None:
             return
-        self._controller.clear_address(port_idx)
+        self._controller.clear_address(port_index)
         self._refresh()
         self._on_select()
 
     def _set_rip_enabled(self) -> None:
-        port_idx = self._selected_port_idx()
-        if port_idx is None:
+        port_index = self._selected_port_index()
+        if port_index is None:
             self._rip_enabled.set(False)
             messagebox.showinfo("No interface", "Select an interface first.")
             return
         try:
-            self._controller.set_rip_enabled(port_idx, self._rip_enabled.get())
+            self._controller.set_rip_enabled(port_index, self._rip_enabled.get())
         except ValueError as exc:
             messagebox.showerror("RIP configuration", str(exc))
         self._refresh()
@@ -308,12 +308,12 @@ class GUI:
         self._after_id = self._root.after(1000, self._tick)
 
     def _send_arp_request(self) -> None:
-        port_idx = self._port_choices.get(self._arp_port.get())
-        if port_idx is None:
+        port_index = self._port_choices.get(self._arp_port.get())
+        if port_index is None:
             messagebox.showinfo("No interface", "Choose an interface first.")
             return
         try:
-            sent = self._controller.send_arp_request(port_idx, self._arp_target.get())
+            sent = self._controller.send_arp_request(port_index, self._arp_target.get())
         except ValueError as exc:
             messagebox.showerror("ARP request", str(exc))
             return
@@ -363,7 +363,7 @@ class GUI:
         settings.pack(anchor="w", pady=(8, 14))
         ttk.Label(settings, text="Allocation mode").grid(row=0, column=0, sticky="w")
         ttk.Combobox(settings, textvariable=self._dhcp_allocation_type,
-                     values=tuple(mode.name.title() for mode in AllocationType), state="readonly", width=16
+                     values=tuple(mode.name.title() for mode in DHCPAllocationType), state="readonly", width=16
                      ).grid(row=1, column=0, padx=(0, 12))
         for column, (label, variable) in enumerate((("Offer timeout (s)", self._dhcp_offer_timeout),
                                                    ("Lease time (s)", self._dhcp_lease_time)), start=1):
@@ -372,13 +372,13 @@ class GUI:
         ttk.Button(settings, text="Apply settings", command=self._apply_dhcp_settings).grid(row=1, column=3)
 
         ttk.Label(parent, text="DHCP assignments", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._dhcp_table = self._make_table(parent, (
+        self._dhcp_table = self._build_table(parent, (
             ("interface", "Interface", 100), ("ip", "IP address", 170), ("mac", "MAC address", 200),
             ("allocation", "Allocation", 130), ("lease", "Lease remaining (s)", 170),
         ), selectmode="none", height=5)
 
         ttk.Label(parent, text="Manual bindings", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self._dhcp_bindings_table = self._make_table(parent, (
+        self._dhcp_bindings_table = self._build_table(parent, (
             ("mac", "MAC address", 280), ("ip", "IP address", 280),
         ), height=4)
         self._dhcp_bindings_table.bind("<<TreeviewSelect>>", self._on_dhcp_binding_select)

@@ -1,10 +1,9 @@
-from collections.abc import Collection
 from ipaddress import IPv4Address, IPv4Network
 
 from models import FIBEntry, RouterPort
 
 
-def lookup_network(ip: IPv4Address, networks: Collection[IPv4Network]) -> IPv4Network | None:
+def lookup_network(ip: IPv4Address, networks: dict) -> IPv4Network | None:
     for prefix_length in range(32, -1, -1):
         network = IPv4Network((ip, prefix_length), strict=False)
         if network in networks:

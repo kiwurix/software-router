@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 from ipaddress import IPv4Address
 from time import monotonic
 
@@ -7,12 +8,11 @@ from scapy.layers.dhcp import BOOTP, DHCP, DHCPOptions, DHCPRevOptions
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
 from scapy.packet import Packet
-from enum import Enum, auto
 
-from arp_manager import ArpManager
+from arp_manager import ARPManager
 from models import RouterPort
 
-class AllocationType(Enum):
+class DHCPAllocationType(Enum):
     MANUAL = auto()
     AUTOMATIC = auto()
     DYNAMIC = auto()
@@ -21,20 +21,20 @@ class AllocationType(Enum):
 @dataclass
 class DHCPRecord:
     ip: IPv4Address
-    allocation_type: AllocationType
+    allocation_type: DHCPAllocationType
     expires_at: float | None
 
 @dataclass
 class DHCPProbe:
-    allocation_type: AllocationType
+    allocation_type: DHCPAllocationType
     bootp: BOOTP
 
-class DHCPManger:
-    def __init__(self, ports: list[RouterPort], arp: ArpManager, send_frame: Callable[[RouterPort, Packet], bool]) -> None:
+class DHCPManager:
+    def __init__(self, ports: list[RouterPort], arp: ARPManager, send_frame: Callable[[RouterPort, Packet], bool]) -> None:
         self._ports = ports
         self._arp = arp
         self._send_frame = send_frame
-        self._allocation_type = AllocationType.DYNAMIC
+        self._allocation_type = DHCPAllocationType.DYNAMIC
         self._offer_timeout = 30
         self._lease_time = 3600
         self._pending_offers: dict[tuple[int, bytes], DHCPRecord] = {}
@@ -70,7 +70,7 @@ class DHCPManger:
             case _: return
 
 
-    def _handle_discover(self, port: RouterPort, bootp: BOOTP, allocation_type: AllocationType) -> None:
+    def _handle_discover(self, port: RouterPort, bootp: BOOTP, allocation_type: DHCPAllocationType) -> None:
         key = self._get_key(port, bootp)
         client_mac = key[1]
         record = self._assignments.get(key) or self._pending_offers.get(key)
@@ -83,7 +83,7 @@ class DHCPManger:
                 probe.bootp = bootp
                 return
 
-        manual_allocation = allocation_type == AllocationType.MANUAL
+        manual_allocation = allocation_type == DHCPAllocationType.MANUAL
 
         while True:
             ip = self._manual_bindings.get(client_mac) if manual_allocation else\
@@ -115,12 +115,12 @@ class DHCPManger:
 
         else:
             self._occupied_addresses.add((port.index, ip))
-            if probe.allocation_type == AllocationType.MANUAL:
+            if probe.allocation_type == DHCPAllocationType.MANUAL:
                 return
             self._handle_discover(port, probe.bootp, probe.allocation_type)
 
 
-    def _send_offer(self, port: RouterPort, bootp: BOOTP, ip: IPv4Address, allocation_type: AllocationType):
+    def _send_offer(self, port: RouterPort, bootp: BOOTP, ip: IPv4Address, allocation_type: DHCPAllocationType):
         key = self._get_key(port, bootp)
 
         self._pending_offers[key] = DHCPRecord(ip, allocation_type, monotonic() + self._offer_timeout)
@@ -130,11 +130,11 @@ class DHCPManger:
 
     def _get_next_available_address(self, port: RouterPort) -> IPv4Address | None:
         not_available_addresses = ([address for mac, address in self._manual_bindings.items()] +
-                    [record.ip for (port_idx, _), record in self._pending_offers.items() if port_idx == port.index] +
-                    [record.ip for (port_idx, _), record in self._assignments.items() if port_idx == port.index] +
-                    [addr for port_idx, addr in self._occupied_addresses if port_idx == port.index] +
+                    [record.ip for (port_index, _), record in self._pending_offers.items() if port_index == port.index] +
+                    [record.ip for (port_index, _), record in self._assignments.items() if port_index == port.index] +
+                    [addr for port_index, addr in self._occupied_addresses if port_index == port.index] +
                     [p.ipv4.ip for p in self._ports if p.ipv4 is not None] +
-                    [addr for port_idx, addr in self._pending_probes if port_idx == port.index])
+                    [addr for port_index, addr in self._pending_probes if port_index == port.index])
 
 
         for address in port.ipv4.network.hosts():
@@ -144,7 +144,7 @@ class DHCPManger:
         return None
 
     def _send_reply(self, port: RouterPort, bootp: BOOTP, message_type: int,
-                    assigned_ip: IPv4Address, allocation_type: AllocationType | None) -> None:
+                    assigned_ip: IPv4Address, allocation_type: DHCPAllocationType | None) -> None:
 
         client_mac = bootp.chaddr[:6]
         port_ip = str(port.ipv4.ip)
@@ -164,7 +164,7 @@ class DHCPManger:
             options[1] = str(port.ipv4.netmask)
             options[3] = str(port_ip)
         if not assigned_ip.is_unspecified and message_type != 6:
-            options[51] = self._lease_time if allocation_type == AllocationType.DYNAMIC else 0xffffffff
+            options[51] = self._lease_time if allocation_type == DHCPAllocationType.DYNAMIC else 0xffffffff
 
         reply /= DHCP(options=[(DHCPOptions[code].name, value) for code, value in options.items()] + ["end"])
 
@@ -203,7 +203,7 @@ class DHCPManger:
 
         assignment = offer or assignment
         assignment.expires_at = monotonic() + self._lease_time\
-            if assignment.allocation_type == AllocationType.DYNAMIC else None
+            if assignment.allocation_type == DHCPAllocationType.DYNAMIC else None
 
         self._assignments[key] = assignment
         self._pending_offers.pop(key, None)
@@ -237,7 +237,7 @@ class DHCPManger:
         if assignment is None or IPv4Address(bootp.ciaddr) != assignment.ip:
             return
 
-        if assignment.allocation_type == AllocationType.DYNAMIC:
+        if assignment.allocation_type == DHCPAllocationType.DYNAMIC:
             del self._assignments[key]
 
     def _handle_inform(self, port: RouterPort, bootp: BOOTP) -> None:
@@ -269,10 +269,10 @@ class DHCPManger:
     def _get_key(port: RouterPort, bootp: BOOTP) -> tuple[int, bytes]:
         return port.index, bootp.chaddr[:6]
 
-    def get_settings(self) -> tuple[AllocationType, int, int]:
+    def get_settings(self) -> tuple[DHCPAllocationType, int, int]:
         return self._allocation_type, self._offer_timeout, self._lease_time
 
-    def set_settings(self, allocation_type: AllocationType, offer_timeout: int, lease_time: int) -> None:
+    def set_settings(self, allocation_type: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
         self._allocation_type = allocation_type
         self._offer_timeout = offer_timeout
         self._lease_time = lease_time

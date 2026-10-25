@@ -7,7 +7,7 @@ from scapy.packet import Packet
 from models import RouterPort
 
 
-class ArpManager:
+class ARPManager:
     def __init__(self) -> None:
         self._entry_lifetime = 300
         self._request_timeout = 5

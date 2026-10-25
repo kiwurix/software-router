@@ -1,15 +1,14 @@
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network
-from collections.abc import Iterable
 
-from router import Router
-from RIB import Route, RouteSource
-from RIP import RIPRecord
+from dhcp_manager import DHCPAllocationType, DHCPRecord
 from models import RIPTimers, RouterPort
-from DHCP import AllocationType, DHCPRecord
+from rib import Route, RouteSource
+from rip_manager import RIPRecord
+from router import Router
 
 
 class Controller:
-    def __init__(self, router: Router, os_ipv4_addresses: Iterable[IPv4Address]) -> None:
+    def __init__(self, router: Router, os_ipv4_addresses: set[IPv4Address]) -> None:
         self._router = router
         self._os_ipv4_addresses = frozenset(os_ipv4_addresses)
 
@@ -135,12 +134,12 @@ class Controller:
         if type(port_index) is not int or not 0 <= port_index < len(self._router.ports):
             raise ValueError("Choose an existing interface.")
 
-    def get_dhcp_settings(self) -> tuple[AllocationType, int, int]:
+    def get_dhcp_settings(self) -> tuple[DHCPAllocationType, int, int]:
         return self._router.get_dhcp_settings()
 
     def set_dhcp_settings(self, allocation_type: str, offer_timeout: str, lease_time: str) -> None:
         try:
-            mode = AllocationType[allocation_type.strip().upper()]
+            mode = DHCPAllocationType[allocation_type.strip().upper()]
             offer = int(offer_timeout.strip())
             lease = int(lease_time.strip())
         except (KeyError, ValueError) as exc:

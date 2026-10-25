@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -9,11 +7,11 @@ from time import monotonic
 
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
-from scapy.layers.rip import RIP as RIPBase, RIPEntry
+from scapy.layers.rip import RIP, RIPEntry
 from scapy.packet import Packet
 
-from RIB import RIB, Route, RouteSource
 from models import RIPTimers, RouterPort
+from rib import RIB, Route, RouteSource
 
 
 @dataclass
@@ -34,7 +32,7 @@ class RIPAdvertisement:
     learned_port: RouterPort | None = None
 
 
-class RIP:
+class RIPManager:
     def __init__(self, ports: list[RouterPort], rib: RIB,
                  send_frame: Callable[[RouterPort, Packet], bool]) -> None:
         self._ports = ports
@@ -58,7 +56,7 @@ class RIP:
 
     @contextmanager
     def advertise_changes(self):
-        before = self._get_advertisement_data()
+        before = self._get_advertisements()
         yield
         self._detect_and_advertise_changes(before)
 
@@ -67,7 +65,7 @@ class RIP:
             return
 
         message = frame[UDP].payload
-        if not isinstance(message, RIPBase) or message.version != 2:
+        if not isinstance(message, RIP) or message.version != 2:
             return
 
         entries = []
@@ -86,7 +84,7 @@ class RIP:
 
     def _handle_request(self, port: RouterPort, frame: Ether, entries: list[RIPEntry]) -> None:
         if len(entries) == 1 and entries[0].AF == 0 and entries[0].metric == 16:
-            advertisements = self._changed_advertisements | self._get_advertisement_data()
+            advertisements = self._changed_advertisements | self._get_advertisements()
             self._send_response([port], advertisements, reply_to=frame)
 
     def _handle_response(self, port: RouterPort, frame: Ether, entries: list[RIPEntry]) -> None:
@@ -97,7 +95,7 @@ class RIP:
         if any(other.ipv4 is not None and other.ipv4.ip == advertiser_ip for other in self._ports):
             return
 
-        before = self._get_advertisement_data()
+        before = self._get_advertisements()
         now = monotonic()
         rib_changed = False
         for entry in entries:
@@ -165,7 +163,7 @@ class RIP:
                 continue
 
             if before is None:
-                before = self._get_advertisement_data()
+                before = self._get_advertisements()
 
             if flush_needed:
                 if record.metric < 16 or record.hold_down_started_at is not None:
@@ -202,7 +200,7 @@ class RIP:
             self._rib.rebuild_selected()
 
     def _detect_and_advertise_changes(self, before: dict[IPv4Network, RIPAdvertisement]) -> None:
-        after = self._get_advertisement_data()
+        after = self._get_advertisements()
         for network in before.keys() | after.keys():
             if before.get(network) != after.get(network):
                 self._changed_advertisements[network] = after.get(network, RIPAdvertisement(metric=16))
@@ -228,7 +226,7 @@ class RIP:
             possibly_down=record.hold_down_started_at is not None,
         )
 
-    def _get_advertisement_data(self) -> dict[IPv4Network, RIPAdvertisement]:
+    def _get_advertisements(self) -> dict[IPv4Network, RIPAdvertisement]:
         advertisement_data = {}
         for route in self._rib.get_selected_routes():
             if route.source == RouteSource.CONNECTED and route.output_port.rip_enabled:
@@ -283,7 +281,7 @@ class RIP:
         else:
             dst_mac, dst_ip, dst_port = reply_to[Ether].src, reply_to[IP].src, reply_to[UDP].sport
 
-        message = RIPBase(cmd=command, version=2)
+        message = RIP(cmd=command, version=2)
         for entry in entries:
             message /= entry
         return (
@@ -296,7 +294,7 @@ class RIP:
     def _send_update(self) -> None:
         now = monotonic()
         if now - self._update_started_at >= self._timers.update:
-            advertisements = self._changed_advertisements | self._get_advertisement_data()
+            advertisements = self._changed_advertisements | self._get_advertisements()
             if self._send_response(self._ports, advertisements):
                 self._changed_advertisements.clear()
                 self._update_started_at = now
