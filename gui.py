@@ -72,7 +72,7 @@ class GUI:
         ttk.Label(parent, text="Interface IP addresses", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._table = self._build_table(parent, (
             ("interface", "Interface", 130), ("mac", "MAC", 180),
-            ("ip", "IP address", 140), ("mask", "Subnet mask", 140), ("rip", "RIP", 70),
+            ("ip", "IP address", 140), ("mask", "Subnet mask", 140), ("rip", "RIP", 70)
         ))
         self._table.bind("<<TreeviewSelect>>", self._on_select)
         form = ttk.Frame(parent)
@@ -90,12 +90,12 @@ class GUI:
         ttk.Label(parent, text="Routing table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._routing_table = self._build_table(parent, (
             ("code", "Code", 60), ("network", "Network", 220), ("preference", "[AD/Metric]", 130),
-            ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
+            ("next_hop", "Next hop", 240), ("interface", "Interface", 120)
         ), selectmode="none", height=6)
         ttk.Label(parent, text="Static routes configuration", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._static_table = self._build_table(parent, (
             ("state", "State", 120), ("network", "Network", 220), ("AD", "AD", 70),
-            ("next_hop", "Next hop", 240), ("interface", "Interface", 120),
+            ("next_hop", "Next hop", 240), ("interface", "Interface", 120)
         ), height=6)
         form = ttk.Frame(parent)
         form.pack(anchor="w", pady=(10, 0))
@@ -124,13 +124,13 @@ class GUI:
         self._rip_table = self._build_table(parent, (
             ("network", "Network", 165), ("metric", "Metric", 60), ("next_hop", "Next hop", 130),
             ("advertiser", "Advertiser", 130), ("interface", "Interface", 80), ("age", "Age (s)", 85),
-            ("hold_down", "Hold-down (s)", 110), ("tag", "Tag", 55),
+            ("hold_down", "Hold-down (s)", 110), ("tag", "Tag", 55)
         ))
 
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._arp_table = self._build_table(parent, (
-            ("interface", "Interface", 100), ("ip", "IP address", 230), ("mac", "MAC address", 230), ("age", "Age (s)", 120),
+            ("interface", "Interface", 100), ("ip", "IP address", 230), ("mac", "MAC address", 230), ("age", "Age (s)", 120)
         ))
         controls = ttk.Frame(parent)
         controls.pack(anchor="w", pady=(0, 10))
@@ -374,12 +374,12 @@ class GUI:
         ttk.Label(parent, text="DHCP assignments", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._dhcp_table = self._build_table(parent, (
             ("interface", "Interface", 100), ("ip", "IP address", 170), ("mac", "MAC address", 200),
-            ("allocation", "Allocation", 130), ("lease", "Lease remaining (s)", 170),
+            ("allocation", "Allocation", 130), ("lease", "Lease remaining (s)", 170)
         ), selectmode="none", height=5)
 
         ttk.Label(parent, text="Manual bindings", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._dhcp_bindings_table = self._build_table(parent, (
-            ("mac", "MAC address", 280), ("ip", "IP address", 280),
+            ("mac", "MAC address", 280), ("ip", "IP address", 280)
         ), height=4)
         self._dhcp_bindings_table.bind("<<TreeviewSelect>>", self._on_dhcp_binding_select)
         bindings = ttk.Frame(parent)

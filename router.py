@@ -51,7 +51,7 @@ class Router:
         self._sniffer = AsyncSniffer(
             iface=device_name_to_port,
             prn=self._handle_frame,
-            store=False,
+            store=False
         )
         self._sniffer.start()
         self._timers_running = True

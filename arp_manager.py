@@ -21,7 +21,7 @@ class ARPManager:
             hwsrc=src_mac,
             psrc=port.ipv4.ip.compressed,
             hwdst="00:00:00:00:00:00",
-            pdst=dst_ip.compressed,
+            pdst=dst_ip.compressed
         )
         self._pending_requests[(port.index, dst_ip)] = monotonic()
         return frame
@@ -33,7 +33,7 @@ class ARPManager:
             hwsrc=port.mac,
             psrc=src_ip.compressed,
             hwdst=dst_mac,
-            pdst=dst_ip.compressed,
+            pdst=dst_ip.compressed
         )
 
     def complete_request(self, port: RouterPort, dst_mac: str, dst_ip: IPv4Address) -> bool:

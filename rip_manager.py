@@ -223,7 +223,7 @@ class RIPManager:
             output_port=record.learned_port,
             next_hop=record.next_hop,
             metric=record.metric,
-            possibly_down=record.hold_down_started_at is not None,
+            possibly_down=record.hold_down_started_at is not None
         )
 
     def _get_advertisements(self) -> dict[IPv4Network, RIPAdvertisement]:
@@ -262,7 +262,7 @@ class RIPManager:
 
                 entries.append(RIPEntry(
                     AF=2, RouteTag=advertisement.tag, addr=str(network.network_address), mask=str(network.netmask),
-                    nextHop="0.0.0.0", metric=min(advertisement.metric + 1, 16),
+                    nextHop="0.0.0.0", metric=min(advertisement.metric + 1, 16)
                 ))
                 if len(entries) == 25:
                     frames.append((port, self._build_frame(port, entries, command=2, reply_to=reply_to)))
