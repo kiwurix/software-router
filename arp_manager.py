@@ -9,8 +9,8 @@ from models import RouterPort
 
 class ArpManager:
     def __init__(self) -> None:
-        self.entry_lifetime = 300
-        self.request_timeout = 5
+        self._entry_lifetime = 300
+        self._request_timeout = 5
         self._cache: dict[tuple[int, IPv4Address], tuple[str, float]] = {}
         self._pending_requests: dict[tuple[int, IPv4Address], float] = {}
 
@@ -51,15 +51,9 @@ class ArpManager:
             return None
         return entry[0]
 
-    def get_table(self) -> list[tuple[int, IPv4Address, str, int]]:
-        now = monotonic()
-        entries = tuple(self._cache.items())
-        return [
-            (port_index, dst_ip, mac, int(now - learned_at))
-            for (port_index, dst_ip), (mac, learned_at) in sorted(
-                entries, key=lambda item: (item[0][0], item[0][1])
-            )
-        ]
+    def get_table(self) -> list[tuple[int, IPv4Address, str, float]]:
+        return [(port_index, dst_ip, mac, learned_at)
+                for (port_index, dst_ip), (mac, learned_at) in self._cache.items()]
 
     def is_pending(self, port: RouterPort, dst_ip: IPv4Address) -> bool:
         return (port.index, dst_ip) in self._pending_requests
@@ -76,22 +70,22 @@ class ArpManager:
         self._pending_requests.clear()
 
     def get_timers(self) -> tuple[int, int]:
-        return self.entry_lifetime, self.request_timeout
+        return self._entry_lifetime, self._request_timeout
 
     def set_timers(self, entry_lifetime: int, request_timeout: int) -> None:
-        self.entry_lifetime = entry_lifetime
-        self.request_timeout = request_timeout
+        self._entry_lifetime = entry_lifetime
+        self._request_timeout = request_timeout
 
     def update_timers(self) -> set[tuple[int, IPv4Address]]:
         now = monotonic()
         self._cache = {
             key: entry
             for key, entry in self._cache.items()
-            if now - entry[1] < self.entry_lifetime
+            if now - entry[1] < self._entry_lifetime
         }
         expired = {
             key for key, requested_at in self._pending_requests.items()
-            if now - requested_at >= self.request_timeout
+            if now - requested_at >= self._request_timeout
         }
         for key in expired:
             del self._pending_requests[key]

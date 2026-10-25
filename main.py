@@ -9,7 +9,7 @@ from controller import Controller
 from router import Router
 
 
-def discover_devices() -> tuple[list[NetworkInterface], set[IPv4Address]]:
+def _discover_devices() -> tuple[list[NetworkInterface], set[IPv4Address]]:
     devices: list[NetworkInterface] = []
     os_ipv4_addresses: set[IPv4Address] = set()
     result = run(
@@ -49,7 +49,7 @@ def discover_devices() -> tuple[list[NetworkInterface], set[IPv4Address]]:
 
 
 def main() -> None:
-    devices, os_ipv4_addresses = discover_devices()
+    devices, os_ipv4_addresses = _discover_devices()
     router = Router(devices)
     controller = Controller(router, os_ipv4_addresses)
     router.start()

@@ -1,103 +1,100 @@
-from ipaddress import IPv4Address, IPv4Interface, IPv4Network, ip_network
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 from collections.abc import Iterable
 
 from router import Router
 from RIB import Route, RouteSource
 from RIP import RIPRecord
 from models import RIPTimers, RouterPort
+from DHCP import AllocationType, DHCPRecord
 
 
 class Controller:
     def __init__(self, router: Router, os_ipv4_addresses: Iterable[IPv4Address]) -> None:
-        self.router = router
-        self.os_ipv4_addresses = frozenset(os_ipv4_addresses)
+        self._router = router
+        self._os_ipv4_addresses = frozenset(os_ipv4_addresses)
 
     @property
     def ports(self) -> tuple[RouterPort, ...]:
-        return self.router.ports
+        return self._router.ports
 
     def set_address(self, port_index: int, address: str, netmask: str) -> None:
         self._check_port(port_index)
-        try:
-            ip = IPv4Address(address.strip())
-            raw_netmask = netmask.strip().removeprefix("/")
-            prefix_length = ip_network(f"0.0.0.0/{raw_netmask}").prefixlen
-            ipv4 = IPv4Interface(f"{ip}/{prefix_length}")
-        except ValueError as exc:
-            raise ValueError("Enter a valid IPv4 address and subnet mask.") from exc
+        ipv4 = self._parse_address(address, netmask)
+        ip = ipv4.ip
+        prefix_length = ipv4.network.prefixlen
 
         if ip.is_unspecified or ip.is_loopback or ip.is_multicast or ip.is_reserved:
             raise ValueError("This address cannot be used on a router interface.")
         if prefix_length < 31 and ip in (ipv4.network.network_address, ipv4.network.broadcast_address):
             raise ValueError("Choose a host address, not a network or broadcast address.")
-        if ip in self.os_ipv4_addresses:
+        if ip in self._os_ipv4_addresses:
             raise ValueError("Windows already uses this IP address.")
         if any(
             other.ipv4 is not None and other.ipv4.ip == ip
-            for index, other in enumerate(self.router.ports) if index != port_index
+            for index, other in enumerate(self._router.ports) if index != port_index
         ):
             raise ValueError("Another router interface already uses this IP address.")
-        self.router.set_address(port_index, ipv4)
+        self._router.set_address(port_index, ipv4)
 
     def clear_address(self, port_index: int) -> None:
         self._check_port(port_index)
-        self.router.set_address(port_index, None)
+        self._router.set_address(port_index, None)
 
     def set_rip_enabled(self, port_index: int, enabled: bool) -> None:
         self._check_port(port_index)
-        self.router.set_rip_enabled(port_index, enabled)
+        self._router.set_rip_enabled(port_index, enabled)
 
-    def add_static_route(self, network: str, port_index: int | None,
+    def add_static_route(self, address: str, netmask: str, port_index: int | None,
                          next_hop: str, AD: str) -> Route:
         try:
-            destination = IPv4Network(network.strip())
+            destination = self._parse_address(address, netmask).network
             neighbour = IPv4Address(next_hop.strip()) if next_hop.strip() else None
             distance = int(AD.strip())
         except ValueError as exc:
-            raise ValueError("Enter a valid network/prefix, next-hop IPv4 address and administrative distance.") from exc
+            raise ValueError("Enter a valid IPv4 address, subnet mask, next hop and administrative distance.") from exc
         if not 1 <= distance <= 254:
             raise ValueError("Administrative distance must be between 1 and 254.")
         output_port = None
         if port_index is not None:
             self._check_port(port_index)
-            output_port = self.router.ports[port_index]
+            output_port = self._router.ports[port_index]
         if neighbour is not None:
             if neighbour.is_unspecified or neighbour.is_loopback or neighbour.is_multicast or neighbour.is_reserved:
                 raise ValueError("Choose a unicast next-hop IPv4 address.")
-            if any(port.ipv4 is not None and port.ipv4.ip == neighbour for port in self.router.ports):
+            if any(port.ipv4 is not None and port.ipv4.ip == neighbour for port in self._router.ports):
                 raise ValueError("The next hop cannot be one of the router's own addresses.")
         route = Route(RouteSource.STATIC, distance, destination, output_port, neighbour)
-        if route in self.router.get_static_routes():
+        if route in self._router.get_static_routes():
             raise ValueError("This static route is already configured.")
-        self.router.add_static_route(route)
+        self._router.add_static_route(route)
         return route
 
     def remove_static_route(self, route: Route) -> None:
-        if route not in self.router.get_static_routes():
+        if route not in self._router.get_static_routes():
             raise ValueError("Select a configured static route.")
-        self.router.remove_static_route(route)
+        self._router.remove_static_route(route)
 
     def get_selected_routes(self) -> tuple[Route, ...]:
-        return self.router.get_selected_routes()
+        return self._router.get_selected_routes()
 
     def get_static_routes(self) -> tuple[Route, ...]:
-        return self.router.get_static_routes()
+        return self._router.get_static_routes()
 
-    def get_arp_table(self) -> list[tuple[int, IPv4Address, str, int]]:
-        return self.router.get_arp_table()
+    def get_arp_table(self) -> list[tuple[int, IPv4Address, str, float]]:
+        return self._router.get_arp_table()
 
     def remove_arp_entry(self, port_index: int, address: str) -> None:
         self._check_port(port_index)
-        self.router.remove_arp_entry(port_index, IPv4Address(address.strip()))
+        self._router.remove_arp_entry(port_index, IPv4Address(address.strip()))
 
     def get_arp_timers(self) -> tuple[int, int]:
-        return self.router.get_arp_timers()
+        return self._router.get_arp_timers()
 
     def get_rip_timers(self) -> RIPTimers:
-        return self.router.get_rip_timers()
+        return self._router.get_rip_timers()
 
     def get_rip_database(self) -> dict[IPv4Network, RIPRecord]:
-        return self.router.get_rip_database()
+        return self._router.get_rip_database()
 
     def set_rip_timers(self, update_interval: str, invalid_timeout: str, hold_down_timeout: str, flush_timeout: str) -> None:
         try:
@@ -111,7 +108,7 @@ class Controller:
             raise ValueError("Update, Invalid and Flush must be positive. Hold-down may be zero.")
         if flush < invalid:
             raise ValueError("Flush must be greater than or equal to Invalid.")
-        self.router.set_rip_timers(RIPTimers(update, invalid, hold_down, flush))
+        self._router.set_rip_timers(RIPTimers(update, invalid, hold_down, flush))
 
     def set_arp_timers(self, entry_lifetime: str, request_timeout: str) -> None:
         try:
@@ -121,7 +118,7 @@ class Controller:
             raise ValueError("Enter positive whole seconds for both ARP timers.") from exc
         if lifetime <= 0 or timeout <= 0:
             raise ValueError("Enter positive whole seconds for both ARP timers.")
-        self.router.set_arp_timers(lifetime, timeout)
+        self._router.set_arp_timers(lifetime, timeout)
 
     def send_arp_request(self, port_index: int, address: str) -> bool:
         self._check_port(port_index)
@@ -129,11 +126,57 @@ class Controller:
             dst_ip = IPv4Address(address.strip())
         except ValueError as exc:
             raise ValueError("Enter a valid target IPv4 address.") from exc
-        return self.router.send_arp_request(port_index, dst_ip)
+        return self._router.send_arp_request(port_index, dst_ip)
 
     def clear_arp(self) -> None:
-        self.router.clear_arp()
+        self._router.clear_arp()
 
     def _check_port(self, port_index: int) -> None:
-        if type(port_index) is not int or not 0 <= port_index < len(self.router.ports):
+        if type(port_index) is not int or not 0 <= port_index < len(self._router.ports):
             raise ValueError("Choose an existing interface.")
+
+    def get_dhcp_settings(self) -> tuple[AllocationType, int, int]:
+        return self._router.get_dhcp_settings()
+
+    def set_dhcp_settings(self, allocation_type: str, offer_timeout: str, lease_time: str) -> None:
+        try:
+            mode = AllocationType[allocation_type.strip().upper()]
+            offer = int(offer_timeout.strip())
+            lease = int(lease_time.strip())
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Choose an allocation mode and enter whole seconds for DHCP timers.") from exc
+        if offer <= 0 or not 1 <= lease < 0xffffffff:
+            raise ValueError("Offer timeout must be positive. Lease time must be between 1 and 4294967294 seconds.")
+        self._router.set_dhcp_settings(mode, offer, lease)
+
+    def get_dhcp_assignments(self) -> dict[tuple[int, bytes], DHCPRecord]:
+        return self._router.get_dhcp_assignments()
+
+    def get_dhcp_manual_bindings(self) -> dict[bytes, IPv4Address]:
+        return self._router.get_dhcp_manual_bindings()
+
+    def set_dhcp_manual_binding(self, client_mac: str, address: str) -> bytes:
+        try:
+            mac = bytes.fromhex(client_mac.strip().replace(":", "").replace("-", ""))
+            ip = IPv4Address(address.strip())
+        except ValueError as exc:
+            raise ValueError("Enter a valid MAC address and IPv4 address.") from exc
+        if len(mac) != 6 or mac == bytes(6) or mac[0] & 1:
+            raise ValueError("Enter a unicast MAC address with six bytes.")
+        if ip.is_unspecified or ip.is_loopback or ip.is_multicast or ip.is_reserved:
+            raise ValueError("Choose a unicast IPv4 address.")
+        self._router.set_dhcp_manual_binding(mac, ip)
+        return mac
+
+    def remove_dhcp_manual_binding(self, client_mac: str) -> None:
+        self._router.remove_dhcp_manual_binding(bytes.fromhex(client_mac.replace(":", "")))
+
+    def clear_dhcp_occupied_addresses(self) -> None:
+        self._router.clear_dhcp_occupied_addresses()
+
+    @staticmethod
+    def _parse_address(address: str, netmask: str) -> IPv4Interface:
+        try:
+            return IPv4Interface(f"{address.strip()}/{netmask.strip().removeprefix('/')}")
+        except ValueError as exc:
+            raise ValueError("Enter a valid IPv4 address and subnet mask.") from exc
