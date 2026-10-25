@@ -4,6 +4,8 @@ from time import monotonic
 from scapy.layers.l2 import ARP, Ether
 from scapy.packet import Packet
 
+from models import RouterPort
+
 
 class ArpManager:
     def __init__(self) -> None:
@@ -12,38 +14,38 @@ class ArpManager:
         self._cache: dict[tuple[int, IPv4Address], tuple[str, float]] = {}
         self._pending_requests: dict[tuple[int, IPv4Address], float] = {}
 
-    def build_request(self, port_index: int, src_mac: str, src_ip: IPv4Address, dst_ip: IPv4Address) -> Packet:
-        src_mac = src_mac.lower()
+    def build_request(self, port: RouterPort, dst_ip: IPv4Address) -> Packet:
+        src_mac = port.mac.lower()
         frame = Ether(src=src_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(
             op=1,
             hwsrc=src_mac,
-            psrc=src_ip.compressed,
+            psrc=port.ipv4.ip.compressed,
             hwdst="00:00:00:00:00:00",
             pdst=dst_ip.compressed,
         )
-        self._pending_requests[(port_index, dst_ip)] = monotonic()
+        self._pending_requests[(port.index, dst_ip)] = monotonic()
         return frame
 
     @staticmethod
-    def build_reply(src_mac: str, src_ip: IPv4Address, dst_mac: str, dst_ip: IPv4Address) -> Packet:
-        return Ether(src=src_mac, dst=dst_mac) / ARP(
+    def build_reply(port: RouterPort, src_ip: IPv4Address, dst_mac: str, dst_ip: IPv4Address) -> Packet:
+        return Ether(src=port.mac, dst=dst_mac) / ARP(
             op=2,
-            hwsrc=src_mac,
+            hwsrc=port.mac,
             psrc=src_ip.compressed,
             hwdst=dst_mac,
             pdst=dst_ip.compressed,
         )
 
-    def complete_request(self, port_index: int, dst_mac: str, dst_ip: IPv4Address) -> bool:
-        key = (port_index, dst_ip)
+    def complete_request(self, port: RouterPort, dst_mac: str, dst_ip: IPv4Address) -> bool:
+        key = (port.index, dst_ip)
         if key not in self._pending_requests:
             return False
         del self._pending_requests[key]
         self._cache[key] = (dst_mac, monotonic())
         return True
 
-    def get_mac(self, port_index: int, dst_ip: IPv4Address) -> str | None:
-        key = (port_index, dst_ip)
+    def get_mac(self, port: RouterPort, dst_ip: IPv4Address) -> str | None:
+        key = (port.index, dst_ip)
         entry = self._cache.get(key)
         if entry is None:
             return None
@@ -59,15 +61,15 @@ class ArpManager:
             )
         ]
 
-    def is_pending(self, port_index: int, dst_ip: IPv4Address) -> bool:
-        return (port_index, dst_ip) in self._pending_requests
+    def is_pending(self, port: RouterPort, dst_ip: IPv4Address) -> bool:
+        return (port.index, dst_ip) in self._pending_requests
 
-    def remove_entry(self, port_index: int, ip: IPv4Address) -> None:
-        self._cache.pop((port_index, ip), None)
+    def remove_entry(self, port: RouterPort, ip: IPv4Address) -> None:
+        self._cache.pop((port.index, ip), None)
 
-    def clear_port(self, port_index: int) -> None:
-        self._cache = {key: entry for key, entry in self._cache.items() if key[0] != port_index}
-        self._pending_requests = {key: requested_at for key, requested_at in self._pending_requests.items() if key[0] != port_index}
+    def clear_port(self, port: RouterPort) -> None:
+        self._cache = {key: entry for key, entry in self._cache.items() if key[0] != port.index}
+        self._pending_requests = {key: requested_at for key, requested_at in self._pending_requests.items() if key[0] != port.index}
 
     def clear(self) -> None:
         self._cache.clear()

@@ -7,7 +7,6 @@ from ipaddress import IPv4Address, IPv4Network
 from random import randint
 from time import monotonic
 
-from scapy.interfaces import NetworkInterface
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
 from scapy.layers.rip import RIP as RIPBase, RIPEntry
@@ -37,7 +36,7 @@ class RIPAdvertisement:
 
 class RIP:
     def __init__(self, ports: list[RouterPort], rib: RIB,
-                 send_frame: Callable[[Packet, NetworkInterface], bool]) -> None:
+                 send_frame: Callable[[RouterPort, Packet], bool]) -> None:
         self._ports = ports
         self._rib = rib
         self._send_frame = send_frame
@@ -249,7 +248,7 @@ class RIP:
     def send_request(self, port: RouterPort) -> None:
         if port.rip_enabled and port.ipv4 is not None:
             entries = [RIPEntry(AF=0, metric=16)]
-            self._send_frame(self._build_frame(port, entries, command=1), port.device)
+            self._send_frame(port, self._build_frame(port, entries, command=1))
 
     def _send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
                       reply_to: Ether | None = None) -> bool:
@@ -268,13 +267,13 @@ class RIP:
                     nextHop="0.0.0.0", metric=min(advertisement.metric + 1, 16),
                 ))
                 if len(entries) == 25:
-                    frames.append((self._build_frame(port, entries, command=2, reply_to=reply_to), port.device))
+                    frames.append((port, self._build_frame(port, entries, command=2, reply_to=reply_to)))
                     entries.clear()
 
             if entries:
-                frames.append((self._build_frame(port, entries, command=2, reply_to=reply_to), port.device))
+                frames.append((port, self._build_frame(port, entries, command=2, reply_to=reply_to)))
 
-        return all([self._send_frame(frame, device) for frame, device in frames])
+        return all([self._send_frame(port, frame) for port, frame in frames])
 
     @staticmethod
     def _build_frame(port: RouterPort, entries: list[RIPEntry], command: int,

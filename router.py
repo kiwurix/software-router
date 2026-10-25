@@ -30,7 +30,7 @@ class Router:
         self.rib = RIB(self.fib)
         self.rip = RIP(self._ports, self.rib, self._send_frame)
         self.arp = ArpManager()
-        self.dhcp = DHCPManger()
+        self.dhcp = DHCPManger(self._ports, self.arp, self._send_frame)
         self._pending_packets: dict[tuple[int, IPv4Address], list[IP]] = {}
         self._sniffer: AsyncSniffer | None = None
         self._timers_running = False
@@ -126,7 +126,7 @@ class Router:
                  ICMP(type=0, id=request.id, seq=request.seq) /
                  request.payload)
 
-        self._send_frame(reply, port.device)
+        self._send_frame(port, reply)
 
     def _is_local_ip(self, ip: IPv4Address) -> bool:
         return any(port.ipv4 is not None and port.ipv4.ip == ip for port in self._ports)
@@ -147,13 +147,14 @@ class Router:
                 if resolved is None or resolved[0] is port:
                     return
 
-            reply = self.arp.build_reply(port.mac, dst_ip, src_mac, src_ip)
-            self._send_frame(reply, port.device)
+            reply = self.arp.build_reply(port, dst_ip, src_mac, src_ip)
+            self._send_frame(port, reply)
             return
 
         if arp_packet.op == 2:
-            if self.arp.complete_request(port.index, src_mac, src_ip):
+            if self.arp.complete_request(port, src_mac, src_ip):
                 key = (port.index, src_ip)
+                self.dhcp.complete_probe(port, src_ip, True)
                 pending_packets = self._pending_packets.pop(key, [])
                 for ip_packet in pending_packets:
                     self._process_ipv4(ip_packet)
@@ -175,32 +176,30 @@ class Router:
 
         port, next_hop = resolved
 
-        dst_mac = self.arp.get_mac(port.index, next_hop)
+        dst_mac = self.arp.get_mac(port, next_hop)
 
         if dst_mac is None:
             key = (port.index, next_hop)
             self._pending_packets.setdefault(key, []).append(packet)
 
-            if not self.arp.is_pending(port.index, next_hop):
-                request = self.arp.build_request(
-                    port.index, port.mac, port.ipv4.ip, next_hop
-                )
+            if not self.arp.is_pending(port, next_hop):
+                request = self.arp.build_request(port, next_hop)
 
         if dst_mac is not None:
-            self._send_ipv4(packet, port, dst_mac)
+            self._send_ipv4(port, packet, dst_mac)
         elif request is not None:
-            self._send_frame(request, port.device)
+            self._send_frame(port, request)
 
 
-    def _send_ipv4(self, packet: IP, port: RouterPort, dst_mac: str) -> None:
+    def _send_ipv4(self, port: RouterPort, packet: IP, dst_mac: str) -> None:
         packet.ttl -= 1
         del packet.chksum
-        self._send_frame(Ether(src=port.mac, dst=dst_mac) / packet, port.device)
+        self._send_frame(port, Ether(src=port.mac, dst=dst_mac) / packet)
 
     @staticmethod
-    def _send_frame(frame: Packet, device: NetworkInterface) -> bool:
+    def _send_frame(port: RouterPort, frame: Packet) -> bool:
         try:
-            sendp(frame, iface=device, verbose=False)
+            sendp(frame, iface=port.device, verbose=False)
             return True
         except Exception:
             logging.exception("Failed to send frame")
@@ -221,8 +220,9 @@ class Router:
             port.ipv4 = ipv4
             self.rib.update_port_routes(port)
         self.rip.send_request(port)
-        self.arp.clear_port(port_index)
+        self.arp.clear_port(port)
         self._pending_packets = {key: packets for key, packets in self._pending_packets.items() if key[0] != port_index}
+        self.dhcp.update_port(port)
 
     @locked
     def set_rip_enabled(self, port_index: int, enabled: bool) -> None:
@@ -238,9 +238,11 @@ class Router:
     @locked
     def _update_timers(self) -> None:
         expired = self.arp.update_timers()
-        for key in expired:
-            self._pending_packets.pop(key, None)
+        for port_index, ip in expired:
+            self._pending_packets.pop((port_index, ip), None)
+            self.dhcp.complete_probe(self._ports[port_index], ip, False)
         self.rip.update_timers()
+        self.dhcp.update_timers()
 
     @locked
     def add_static_route(self, route: Route) -> None:
@@ -266,7 +268,7 @@ class Router:
 
     @locked
     def remove_arp_entry(self, port_index: int, ip: IPv4Address) -> None:
-        self.arp.remove_entry(port_index, ip)
+        self.arp.remove_entry(self._ports[port_index], ip)
 
     @locked
     def get_arp_timers(self) -> tuple[int, int]:
@@ -294,11 +296,12 @@ class Router:
         ipv4 = port.ipv4
         if ipv4 is None:
             raise ValueError("Selected interface has no IPv4 address.")
-        request = self.arp.build_request(port_index, port.mac, ipv4.ip, dst_ip)
+        request = self.arp.build_request(port, dst_ip)
 
-        return self._send_frame(request, port.device)
+        return self._send_frame(port, request)
 
     @locked
     def clear_arp(self) -> None:
         self.arp.clear()
         self._pending_packets.clear()
+        self.dhcp.pending_probes.clear()
