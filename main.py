@@ -11,7 +11,8 @@ from router import Router
 def _discover_devices() -> tuple[list[NetworkInterface], set[IPv4Address]]:
     interfaces = list(conf.ifaces.values())
     devices = [device for device in interfaces
-               if device.type == 6 and device.mac and "virtual" not in device.description.lower()]
+               if device.type == 6 and device.mac
+               and "virtual" not in device.description.lower() and "ethernet" in device.description.lower()]
     os_ipv4_addresses = {IPv4Address(address) for device in interfaces for address in device.ips[4]}
     return devices, os_ipv4_addresses
 
