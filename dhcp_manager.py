@@ -12,6 +12,7 @@ from scapy.packet import Packet
 from arp_manager import ARPManager
 from models import RouterPort
 
+
 class DHCPAllocationType(Enum):
     MANUAL = auto()
     AUTOMATIC = auto()
@@ -24,13 +25,16 @@ class DHCPRecord:
     allocation_type: DHCPAllocationType
     expires_at: float | None
 
+
 @dataclass
 class DHCPProbe:
     allocation_type: DHCPAllocationType
     bootp: BOOTP
 
+
 class DHCPManager:
-    def __init__(self, ports: list[RouterPort], arp: ARPManager, send_frame: Callable[[RouterPort, Packet], bool]) -> None:
+    def __init__(self, ports: list[RouterPort], arp: ARPManager,
+                 send_frame: Callable[[RouterPort, Packet], bool]) -> None:
         self._ports = ports
         self._arp = arp
         self._send_frame = send_frame
@@ -43,7 +47,6 @@ class DHCPManager:
         self._occupied_addresses: set[tuple[int, IPv4Address]] = set()
         self._pending_probes: dict[tuple[int, IPv4Address], DHCPProbe] = {}
 
-
     def handle(self, port: RouterPort, datagram: UDP) -> None:
         bootp = datagram.payload
         if not isinstance(bootp, BOOTP):
@@ -51,7 +54,7 @@ class DHCPManager:
 
         dhcp = bootp.payload
 
-        if  not isinstance(dhcp, DHCP):
+        if not isinstance(dhcp, DHCP):
             return
 
         options = {}
@@ -60,15 +63,19 @@ class DHCPManager:
                 code = DHCPRevOptions[option[0]][0]
                 options[code] = option[1]
 
-
         match options.get(53):
-            case 1: self._handle_discover(port, bootp, self._allocation_type)
-            case 3: self._handle_request(port, bootp, options)
-            case 4: self._handle_decline(port, bootp, options)
-            case 7: self._handle_release(port, bootp, options)
-            case 8: self._handle_inform(port, bootp)
-            case _: return
-
+            case 1:
+                self._handle_discover(port, bootp, self._allocation_type)
+            case 3:
+                self._handle_request(port, bootp, options)
+            case 4:
+                self._handle_decline(port, bootp, options)
+            case 7:
+                self._handle_release(port, bootp, options)
+            case 8:
+                self._handle_inform(port, bootp)
+            case _:
+                return
 
     def _handle_discover(self, port: RouterPort, bootp: BOOTP, allocation_type: DHCPAllocationType) -> None:
         key = self._get_key(port, bootp)
@@ -86,7 +93,7 @@ class DHCPManager:
         manual_allocation = allocation_type == DHCPAllocationType.MANUAL
 
         while True:
-            ip = self._manual_bindings.get(client_mac) if manual_allocation else\
+            ip = self._manual_bindings.get(client_mac) if manual_allocation else \
                 self._get_next_available_address(port)
 
             if ip is None:
@@ -104,7 +111,6 @@ class DHCPManager:
                 self._send_frame(port, request)
                 return
 
-
     def complete_probe(self, port: RouterPort, ip: IPv4Address, is_replied: bool):
         probe = self._pending_probes.pop((port.index, ip), None)
         if probe is None:
@@ -119,23 +125,21 @@ class DHCPManager:
                 return
             self._handle_discover(port, probe.bootp, probe.allocation_type)
 
-
     def _send_offer(self, port: RouterPort, bootp: BOOTP, ip: IPv4Address, allocation_type: DHCPAllocationType):
         key = self._get_key(port, bootp)
 
         self._pending_offers[key] = DHCPRecord(ip, allocation_type, monotonic() + self._offer_timeout)
         self._send_reply(port, bootp, 2, ip, allocation_type)
 
-
-
     def _get_next_available_address(self, port: RouterPort) -> IPv4Address | None:
         not_available_addresses = ([address for mac, address in self._manual_bindings.items()] +
-                    [record.ip for (port_index, _), record in self._pending_offers.items() if port_index == port.index] +
-                    [record.ip for (port_index, _), record in self._assignments.items() if port_index == port.index] +
-                    [addr for port_index, addr in self._occupied_addresses if port_index == port.index] +
-                    [p.ipv4.ip for p in self._ports if p.ipv4 is not None] +
-                    [addr for port_index, addr in self._pending_probes if port_index == port.index])
-
+                                   [record.ip for (port_index, _), record in self._pending_offers.items() if
+                                    port_index == port.index] +
+                                   [record.ip for (port_index, _), record in self._assignments.items() if
+                                    port_index == port.index] +
+                                   [addr for port_index, addr in self._occupied_addresses if port_index == port.index] +
+                                   [p.ipv4.ip for p in self._ports if p.ipv4 is not None] +
+                                   [addr for port_index, addr in self._pending_probes if port_index == port.index])
 
         for address in port.ipv4.network.hosts():
             if address not in not_available_addresses:
@@ -157,7 +161,8 @@ class DHCPManager:
             dst_ip, dst_mac = str(assigned_ip), client_mac
 
         reply = BOOTP(op=2, htype=1, hlen=6, xid=bootp.xid, chaddr=bootp.chaddr, flags=bootp.flags,
-                      giaddr="0.0.0.0", ciaddr=bootp.ciaddr if message_type == 5 else "0.0.0.0", yiaddr=str(assigned_ip))
+                      giaddr="0.0.0.0", ciaddr=bootp.ciaddr if message_type == 5 else "0.0.0.0",
+                      yiaddr=str(assigned_ip))
 
         options = {53: message_type, 54: str(port_ip)}
         if message_type in (2, 5):
@@ -172,7 +177,6 @@ class DHCPManager:
                  IP(src=str(port_ip), dst=dst_ip) /
                  UDP(sport=67, dport=68) /
                  reply)
-
 
         self._send_frame(port, frame)
 
@@ -201,8 +205,8 @@ class DHCPManager:
             self._send_reply(port, bootp, 6, IPv4Address("0.0.0.0"), None)
             return
 
-        assignment = offer or assignment
-        assignment.expires_at = monotonic() + self._lease_time\
+        assignment = assignment or offer
+        assignment.expires_at = monotonic() + self._lease_time \
             if assignment.allocation_type == DHCPAllocationType.DYNAMIC else None
 
         self._assignments[key] = assignment

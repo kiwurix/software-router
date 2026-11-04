@@ -45,8 +45,8 @@ class GUI:
 
         self._notebook = ttk.Notebook(self._root)
         self._notebook.pack(fill="both", expand=True, padx=12, pady=12)
-        for title, build in (("Interfaces", self._build_interfaces), ("Routing", self._build_routing),
-                             ("ARP", self._build_arp), ("RIP", self._build_rip), ("DHCP", self._build_dhcp)):
+        for title, build in (("Interfaces", self._build_interfaces), ("ARP", self._build_arp),
+                             ("Routing", self._build_routing), ("RIP", self._build_rip), ("DHCP", self._build_dhcp)):
             tab = ttk.Frame(self._notebook, padding=12)
             self._notebook.add(tab, text=title)
             build(tab)
