@@ -71,7 +71,7 @@ class GUI:
     def _build_interfaces(self, parent) -> None:
         ttk.Label(parent, text="Interface IP addresses", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._table = self._build_table(parent, (
-            ("interface", "Interface", 130), ("mac", "MAC", 180),
+            ("interface", "Interface", 130), ("mac", "MAC address", 180),
             ("ip", "IP address", 140), ("mask", "Subnet mask", 140), ("rip", "RIP", 70)
         ))
         self._table.bind("<<TreeviewSelect>>", self._on_select)
@@ -130,7 +130,7 @@ class GUI:
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._arp_table = self._build_table(parent, (
-            ("interface", "Interface", 100), ("ip", "IP address", 230), ("mac", "MAC address", 230), ("age", "Age (s)", 120)
+            ("interface", "Interface", 100), ("mac", "MAC address", 230), ("ip", "IP address", 230), ("age", "Age (s)", 120)
         ))
         controls = ttk.Frame(parent)
         controls.pack(anchor="w", pady=(0, 10))
@@ -230,7 +230,7 @@ class GUI:
     def _refresh_arp(self) -> None:
         entries = sorted(self._controller.get_arp_table(), key=lambda entry: (entry[0], entry[1]))
         now = monotonic()
-        rows = {f"{port_index}:{ip}": (f"Fa{port_index}", ip, mac, int(now - learned_at))
+        rows = {f"{port_index}:{ip}": (f"Fa{port_index}", mac, ip, int(now - learned_at))
                 for port_index, ip, mac, learned_at in entries}
         self._sync_table(self._arp_table, rows)
 
@@ -373,7 +373,7 @@ class GUI:
 
         ttk.Label(parent, text="DHCP assignments", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._dhcp_table = self._build_table(parent, (
-            ("interface", "Interface", 100), ("ip", "IP address", 170), ("mac", "MAC address", 200),
+            ("interface", "Interface", 100), ("mac", "MAC address", 200), ("ip", "IP address", 170),
             ("allocation", "Allocation", 130), ("lease", "Lease remaining (s)", 170)
         ), selectmode="none", height=5)
 
@@ -402,7 +402,7 @@ class GUI:
         rows = {}
         for (port_index, mac), record in sorted(assignments.items(), key=lambda item: (item[0][0], int(item[1].ip))):
             remaining = "Permanent" if record.expires_at is None else max(0, ceil(record.expires_at - now))
-            rows[f"{port_index}:{mac.hex()}"] = (f"Fa{port_index}", record.ip, mac.hex(":"),
+            rows[f"{port_index}:{mac.hex()}"] = (f"Fa{port_index}", mac.hex(":"), record.ip,
                                                  record.allocation_type.name.title(), remaining)
         self._sync_table(self._dhcp_table, rows)
         bindings = self._controller.get_dhcp_manual_bindings()

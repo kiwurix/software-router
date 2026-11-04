@@ -291,10 +291,6 @@ class DHCPManager:
     def set_manual_binding(self, client_mac: bytes, ip: IPv4Address) -> None:
         if any(port.ipv4 is not None and port.ipv4.ip == ip for port in self._ports):
             raise ValueError("The router already uses this IP address.")
-        if not any(port.ipv4 is not None and ip in port.ipv4.network
-                   and ip not in (port.ipv4.network.network_address, port.ipv4.network.broadcast_address)
-                   for port in self._ports):
-            raise ValueError("Choose a host address from a configured interface subnet.")
         if any(mac != client_mac and address == ip for mac, address in self._manual_bindings.items()):
             raise ValueError("This IP address is reserved for another client.")
         if any(mac != client_mac and record.ip == ip for records in (self._pending_offers, self._assignments)
