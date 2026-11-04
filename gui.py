@@ -125,13 +125,13 @@ class GUI:
             ("network", "Network", 165), ("metric", "Metric", 60), ("next_hop", "Next hop", 130),
             ("advertiser", "Advertiser", 130), ("interface", "Interface", 80), ("age", "Age (s)", 85),
             ("hold_down", "Hold-down (s)", 110), ("tag", "Tag", 55)
-        ))
+        ), selectmode="none")
 
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._arp_table = self._build_table(parent, (
             ("interface", "Interface", 100), ("mac", "MAC address", 230), ("ip", "IP address", 230), ("age", "Age (s)", 120)
-        ))
+        ), selectmode="none")
         controls = ttk.Frame(parent)
         controls.pack(anchor="w", pady=(0, 10))
         ttk.Label(controls, text="Interface").grid(row=0, column=0, sticky="w")
@@ -142,7 +142,6 @@ class GUI:
         ttk.Button(controls, text="Send ARP request", command=self._send_arp_request).grid(row=1, column=2)
         buttons = ttk.Frame(parent)
         buttons.pack(anchor="w", pady=(0, 16))
-        ttk.Button(buttons, text="Delete selected entry", command=self._remove_arp_entry).pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="Clear ARP table", command=self._clear_arp).pack(side="left")
         timers = ttk.Frame(parent)
         timers.pack(anchor="w")
@@ -321,15 +320,6 @@ class GUI:
             messagebox.showerror("ARP request", "Failed to send the request.")
         self._refresh_arp()
 
-    def _remove_arp_entry(self) -> None:
-        selected = self._arp_table.selection()
-        if not selected:
-            messagebox.showinfo("No ARP entry", "Select an ARP entry first.")
-            return
-        port_index, ip = selected[0].split(":", 1)
-        self._controller.remove_arp_entry(int(port_index), ip)
-        self._refresh_arp()
-
     def _clear_arp(self) -> None:
         self._controller.clear_arp()
         self._refresh_arp()
@@ -395,7 +385,6 @@ class GUI:
         buttons.pack(anchor="w")
         ttk.Button(buttons, text="Delete selected manual binding", command=self._remove_dhcp_manual_binding
                    ).pack(side="left", padx=(0, 8))
-        ttk.Button(buttons, text="Clear occupied addresses", command=self._clear_dhcp_occupied_addresses).pack(side="left")
 
     def _refresh_dhcp(self) -> None:
         now = monotonic()
@@ -446,6 +435,3 @@ class GUI:
             return
         self._controller.remove_dhcp_manual_binding(selected[0])
         self._refresh_dhcp()
-
-    def _clear_dhcp_occupied_addresses(self) -> None:
-        self._controller.clear_dhcp_occupied_addresses()
