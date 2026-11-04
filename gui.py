@@ -363,7 +363,8 @@ class GUI:
         settings.pack(anchor="w", pady=(8, 14))
         ttk.Label(settings, text="Allocation mode").grid(row=0, column=0, sticky="w")
         ttk.Combobox(settings, textvariable=self._dhcp_allocation_type,
-                     values=tuple(mode.name.title() for mode in DHCPAllocationType), state="readonly", width=16
+                     values=tuple(mode.name.title() for mode in (DHCPAllocationType.DYNAMIC, DHCPAllocationType.AUTOMATIC)),
+                     state="readonly", width=16
                      ).grid(row=1, column=0, padx=(0, 12))
         for column, (label, variable) in enumerate((("Offer timeout (s)", self._dhcp_offer_timeout),
                                                    ("Lease time (s)", self._dhcp_lease_time)), start=1):

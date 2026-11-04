@@ -90,18 +90,19 @@ class DHCPManager:
                 probe.bootp = bootp
                 return
 
-        manual_allocation = allocation_type == DHCPAllocationType.MANUAL
+        manual_ip = self._manual_bindings.get(client_mac)
+        if manual_ip is not None:
+            allocation_type = DHCPAllocationType.MANUAL
 
         while True:
-            ip = self._manual_bindings.get(client_mac) if manual_allocation else \
-                self._get_next_available_address(port)
+            ip = manual_ip or self._get_next_available_address(port)
 
             if ip is None:
                 return
 
             if self._arp.get_mac(port, ip):
                 self._occupied_addresses.add((port.index, ip))
-                if manual_allocation:
+                if allocation_type == DHCPAllocationType.MANUAL:
                     return
 
             else:
