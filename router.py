@@ -15,9 +15,9 @@ from scapy.utils import checksum
 from arp_manager import ARPManager
 from dhcp_manager import DHCPAllocationType, DHCPManager, DHCPRecord
 from fib import FIB
-from models import RIPTimers, RouterPort
+from models import RouterPort
 from rib import RIB, Route
-from rip_manager import RIPManager, RIPRecord
+from rip_manager import RIPManager, RIPRecord, RIPTimers
 
 
 def _locked(func: Callable):
@@ -120,7 +120,7 @@ class Router:
                 return
 
             if udp.dport == 520 and (local_mac and local_ip or
-                    dst_mac == "01:00:5e:00:00:09" and packet.dst == "224.0.0.9"):
+                                     dst_mac == "01:00:5e:00:00:09" and packet.dst == "224.0.0.9"):
                 self._rip.handle(port, frame)
                 return
 
@@ -206,7 +206,6 @@ class Router:
         elif request is not None:
             self._send_frame(port, request)
 
-
     def _send_ipv4(self, port: RouterPort, packet: IP, dst_mac: str) -> None:
         packet.ttl -= 1
         del packet.chksum
@@ -282,10 +281,6 @@ class Router:
         return self._arp.get_table()
 
     @_locked
-    def remove_arp_entry(self, port_index: int, ip: IPv4Address) -> None:
-        self._arp.remove_entry(self._ports[port_index], ip)
-
-    @_locked
     def get_arp_timers(self) -> tuple[int, int]:
         return self._arp.get_timers()
 
@@ -326,8 +321,8 @@ class Router:
         return self._dhcp.get_settings()
 
     @_locked
-    def set_dhcp_settings(self, allocation_type: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
-        self._dhcp.set_settings(allocation_type, offer_timeout, lease_time)
+    def set_dhcp_settings(self, allocation_mode: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
+        self._dhcp.set_settings(allocation_mode, offer_timeout, lease_time)
 
     @_locked
     def get_dhcp_assignments(self) -> dict[tuple[int, bytes], DHCPRecord]:
@@ -344,7 +339,3 @@ class Router:
     @_locked
     def remove_dhcp_manual_binding(self, client_mac: bytes) -> None:
         self._dhcp.remove_manual_binding(client_mac)
-
-    @_locked
-    def clear_dhcp_occupied_addresses(self) -> None:
-        self._dhcp.clear_occupied_addresses()

@@ -10,8 +10,16 @@ from scapy.layers.l2 import Ether
 from scapy.layers.rip import RIP, RIPEntry
 from scapy.packet import Packet
 
-from models import RIPTimers, RouterPort
+from models import RouterPort
 from rib import RIB, Route, RouteSource
+
+
+@dataclass(frozen=True)
+class RIPTimers:
+    update: int = 30
+    invalid: int = 180
+    hold_down: int = 180
+    flush: int = 240
 
 
 @dataclass
@@ -89,7 +97,7 @@ class RIPManager:
 
     def _handle_response(self, port: RouterPort, frame: Ether, entries: list[RIPEntry]) -> None:
         advertiser_ip = IPv4Address(frame[IP].src)
-        
+
         if frame[UDP].sport != 520 or advertiser_ip not in port.ipv4.network:
             return
         if any(other.ipv4 is not None and other.ipv4.ip == advertiser_ip for other in self._ports):
@@ -111,14 +119,12 @@ class RIPManager:
             if old_record is not None:
                 if (old_record.hold_down_started_at is not None and
                         now - old_record.hold_down_started_at < self._timers.hold_down):
-                        continue
+                    continue
                 if old_record.advertiser_ip != advertiser_ip and entry.metric >= old_record.metric:
                     continue
 
                 if old_record.metric < 16 or old_record.hold_down_started_at is not None:
                     old_route = self._build_rib_route(network, old_record)
-
-
 
             if entry.metric == 16:
                 if old_route:
@@ -227,21 +233,21 @@ class RIPManager:
         )
 
     def _get_advertisements(self) -> dict[IPv4Network, RIPAdvertisement]:
-        advertisement_data = {}
+        advertisements = {}
         for route in self._rib.get_selected_routes():
             if route.source == RouteSource.CONNECTED and route.output_port.rip_enabled:
-                advertisement_data[route.network] = RIPAdvertisement(metric=route.metric)
+                advertisements[route.network] = RIPAdvertisement(metric=route.metric)
             elif route.source == RouteSource.RIP:
                 record = self._database[route.network]
-                advertisement_data[route.network] = RIPAdvertisement(
+                advertisements[route.network] = RIPAdvertisement(
                     metric=record.metric, tag=record.tag, learned_port=record.learned_port
                 )
         for network, record in self._database.items():
             if record.metric == 16:
-                advertisement_data.setdefault(network, RIPAdvertisement(
+                advertisements.setdefault(network, RIPAdvertisement(
                     metric=16, tag=record.tag, learned_port=record.learned_port
                 ))
-        return advertisement_data
+        return advertisements
 
     def send_request(self, port: RouterPort) -> None:
         if port.rip_enabled and port.ipv4 is not None:
@@ -249,7 +255,7 @@ class RIPManager:
             self._send_frame(port, self._build_frame(port, entries, command=1))
 
     def _send_response(self, ports: list[RouterPort], advertisements: dict[IPv4Network, RIPAdvertisement],
-                      reply_to: Ether | None = None) -> bool:
+                       reply_to: Ether | None = None) -> bool:
         frames = []
         for port in ports:
             if not port.rip_enabled or port.ipv4 is None:

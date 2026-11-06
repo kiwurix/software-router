@@ -14,14 +14,6 @@ class RouterPort:
 
 
 @dataclass(frozen=True)
-class RIPTimers:
-    update: int = 30
-    invalid: int = 180
-    hold_down: int = 180
-    flush: int = 240
-
-
-@dataclass(frozen=True)
 class FIBEntry:
     output_port: RouterPort
     next_hop: IPv4Address | None

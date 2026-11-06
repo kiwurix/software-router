@@ -58,12 +58,10 @@ class ARPManager:
     def is_pending(self, port: RouterPort, dst_ip: IPv4Address) -> bool:
         return (port.index, dst_ip) in self._pending_requests
 
-    def remove_entry(self, port: RouterPort, ip: IPv4Address) -> None:
-        self._cache.pop((port.index, ip), None)
-
     def clear_port(self, port: RouterPort) -> None:
         self._cache = {key: entry for key, entry in self._cache.items() if key[0] != port.index}
-        self._pending_requests = {key: requested_at for key, requested_at in self._pending_requests.items() if key[0] != port.index}
+        self._pending_requests = {key: requested_at for key, requested_at in self._pending_requests.items() if
+                                  key[0] != port.index}
 
     def clear(self) -> None:
         self._cache.clear()

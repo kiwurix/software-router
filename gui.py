@@ -35,8 +35,8 @@ class GUI:
         self._rip_invalid_timeout = tk.StringVar(self._root, value=str(timers.invalid))
         self._rip_hold_down_timeout = tk.StringVar(self._root, value=str(timers.hold_down))
         self._rip_flush_timeout = tk.StringVar(self._root, value=str(timers.flush))
-        allocation_type, offer_timeout, lease_time = controller.get_dhcp_settings()
-        self._dhcp_allocation_type = tk.StringVar(self._root, value=allocation_type.name.title())
+        allocation_mode, offer_timeout, lease_time = controller.get_dhcp_settings()
+        self._dhcp_allocation_mode = tk.StringVar(self._root, value=allocation_mode.name.title())
         self._dhcp_offer_timeout = tk.StringVar(self._root, value=str(offer_timeout))
         self._dhcp_lease_time = tk.StringVar(self._root, value=str(lease_time))
         self._dhcp_binding_mac = tk.StringVar(self._root)
@@ -83,7 +83,8 @@ class GUI:
         ttk.Entry(form, textvariable=self._mask, width=19).grid(row=1, column=1, padx=(0, 12))
         ttk.Button(form, text="Apply address", command=self._apply_address).grid(row=1, column=2, padx=(0, 8))
         ttk.Button(form, text="Clear address", command=self._clear_address).grid(row=1, column=3, padx=(0, 16))
-        self._rip_toggle = ttk.Checkbutton(form, text="Enable RIP", variable=self._rip_enabled, command=self._set_rip_enabled)
+        self._rip_toggle = ttk.Checkbutton(form, text="Enable RIP", variable=self._rip_enabled,
+                                           command=self._set_rip_enabled)
         self._rip_toggle.grid(row=1, column=4)
 
     def _build_routing(self, parent) -> None:
@@ -108,7 +109,8 @@ class GUI:
         ttk.Entry(form, textvariable=self._static_next_hop, width=18).grid(row=1, column=3, padx=(0, 12))
         ttk.Entry(form, textvariable=self._static_AD, width=7).grid(row=1, column=4, padx=(0, 12))
         ttk.Button(form, text="Add route", command=self._add_static_route).grid(row=1, column=5)
-        ttk.Button(parent, text="Delete selected static route", command=self._remove_static_route).pack(anchor="w", pady=(10, 0))
+        ttk.Button(parent, text="Delete selected static route", command=self._remove_static_route).pack(anchor="w",
+                                                                                                        pady=(10, 0))
 
     def _build_rip(self, parent) -> None:
         ttk.Label(parent, text="RIP timers", font=("Segoe UI", 14, "bold")).pack(anchor="w")
@@ -130,7 +132,8 @@ class GUI:
     def _build_arp(self, parent) -> None:
         ttk.Label(parent, text="ARP table", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._arp_table = self._build_table(parent, (
-            ("interface", "Interface", 100), ("mac", "MAC address", 230), ("ip", "IP address", 230), ("age", "Age (s)", 120)
+            ("interface", "Interface", 100), ("mac", "MAC address", 230), ("ip", "IP address", 230),
+            ("age", "Age (s)", 120)
         ), selectmode="none")
         controls = ttk.Frame(parent)
         controls.pack(anchor="w", pady=(0, 10))
@@ -238,7 +241,8 @@ class GUI:
         timers = self._controller.get_rip_timers()
         now = monotonic()
         rows = {}
-        for network, record in sorted(database.items(), key=lambda item: (int(item[0].network_address), item[0].prefixlen)):
+        for network, record in sorted(database.items(),
+                                      key=lambda item: (int(item[0].network_address), item[0].prefixlen)):
             age = int(now - record.updated_at)
             remaining = 0
             if record.hold_down_started_at is not None:
@@ -284,7 +288,8 @@ class GUI:
     def _add_static_route(self) -> None:
         try:
             route = self._controller.add_static_route(self._static_address.get(), self._static_mask.get(),
-                        self._port_choices.get(self._static_port.get()), self._static_next_hop.get(), self._static_AD.get())
+                                                      self._port_choices.get(self._static_port.get()),
+                                                      self._static_next_hop.get(), self._static_AD.get())
         except ValueError as exc:
             messagebox.showerror("Invalid static route", str(exc))
             return
@@ -327,7 +332,7 @@ class GUI:
     def _apply_rip_timers(self) -> None:
         try:
             self._controller.set_rip_timers(self._rip_update_interval.get(), self._rip_invalid_timeout.get(),
-                                           self._rip_hold_down_timeout.get(), self._rip_flush_timeout.get())
+                                            self._rip_hold_down_timeout.get(), self._rip_flush_timeout.get())
         except ValueError as exc:
             messagebox.showerror("RIP timers", str(exc))
             return
@@ -352,12 +357,13 @@ class GUI:
         settings = ttk.Frame(parent)
         settings.pack(anchor="w", pady=(8, 14))
         ttk.Label(settings, text="Allocation mode").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(settings, textvariable=self._dhcp_allocation_type,
-                     values=tuple(mode.name.title() for mode in (DHCPAllocationType.DYNAMIC, DHCPAllocationType.AUTOMATIC)),
+        ttk.Combobox(settings, textvariable=self._dhcp_allocation_mode,
+                     values=tuple(
+                         mode.name.title() for mode in (DHCPAllocationType.DYNAMIC, DHCPAllocationType.AUTOMATIC)),
                      state="readonly", width=16
                      ).grid(row=1, column=0, padx=(0, 12))
         for column, (label, variable) in enumerate((("Offer timeout (s)", self._dhcp_offer_timeout),
-                                                   ("Lease time (s)", self._dhcp_lease_time)), start=1):
+                                                    ("Lease time (s)", self._dhcp_lease_time)), start=1):
             ttk.Label(settings, text=label).grid(row=0, column=column, sticky="w")
             ttk.Entry(settings, textvariable=variable, width=18).grid(row=1, column=column, padx=(0, 12))
         ttk.Button(settings, text="Apply settings", command=self._apply_dhcp_settings).grid(row=1, column=3)
@@ -401,13 +407,13 @@ class GUI:
 
     def _apply_dhcp_settings(self) -> None:
         try:
-            self._controller.set_dhcp_settings(self._dhcp_allocation_type.get(), self._dhcp_offer_timeout.get(),
-                                              self._dhcp_lease_time.get())
+            self._controller.set_dhcp_settings(self._dhcp_allocation_mode.get(), self._dhcp_offer_timeout.get(),
+                                               self._dhcp_lease_time.get())
         except ValueError as exc:
             messagebox.showerror("DHCP configuration", str(exc))
             return
-        allocation_type, offer_timeout, lease_time = self._controller.get_dhcp_settings()
-        self._dhcp_allocation_type.set(allocation_type.name.title())
+        allocation_mode, offer_timeout, lease_time = self._controller.get_dhcp_settings()
+        self._dhcp_allocation_mode.set(allocation_mode.name.title())
         self._dhcp_offer_timeout.set(str(offer_timeout))
         self._dhcp_lease_time.set(str(lease_time))
 

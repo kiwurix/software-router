@@ -38,7 +38,7 @@ class DHCPManager:
         self._ports = ports
         self._arp = arp
         self._send_frame = send_frame
-        self._allocation_type = DHCPAllocationType.DYNAMIC
+        self._allocation_mode = DHCPAllocationType.DYNAMIC
         self._offer_timeout = 30
         self._lease_time = 3600
         self._pending_offers: dict[tuple[int, bytes], DHCPRecord] = {}
@@ -65,7 +65,7 @@ class DHCPManager:
 
         match options.get(53):
             case 1:
-                self._handle_discover(port, bootp, self._allocation_type)
+                self._handle_discover(port, bootp, self._allocation_mode)
             case 3:
                 self._handle_request(port, bootp, options)
             case 4:
@@ -112,12 +112,12 @@ class DHCPManager:
                 self._send_frame(port, request)
                 return
 
-    def complete_probe(self, port: RouterPort, ip: IPv4Address, is_replied: bool):
+    def complete_probe(self, port: RouterPort, ip: IPv4Address, reply_received: bool):
         probe = self._pending_probes.pop((port.index, ip), None)
         if probe is None:
             return
 
-        if not is_replied:
+        if not reply_received:
             self._send_offer(port, probe.bootp, ip, probe.allocation_type)
 
         else:
@@ -133,17 +133,17 @@ class DHCPManager:
         self._send_reply(port, bootp, 2, ip, allocation_type)
 
     def _get_next_available_address(self, port: RouterPort) -> IPv4Address | None:
-        not_available_addresses = ([address for mac, address in self._manual_bindings.items()] +
-                                   [record.ip for (port_index, _), record in self._pending_offers.items() if
-                                    port_index == port.index] +
-                                   [record.ip for (port_index, _), record in self._assignments.items() if
-                                    port_index == port.index] +
-                                   [addr for port_index, addr in self._occupied_addresses if port_index == port.index] +
-                                   [p.ipv4.ip for p in self._ports if p.ipv4 is not None] +
-                                   [addr for port_index, addr in self._pending_probes if port_index == port.index])
+        unavailable_addresses = ([address for mac, address in self._manual_bindings.items()] +
+                                 [record.ip for (port_index, _), record in self._pending_offers.items() if
+                                  port_index == port.index] +
+                                 [record.ip for (port_index, _), record in self._assignments.items() if
+                                  port_index == port.index] +
+                                 [addr for port_index, addr in self._occupied_addresses if port_index == port.index] +
+                                 [p.ipv4.ip for p in self._ports if p.ipv4 is not None] +
+                                 [addr for port_index, addr in self._pending_probes if port_index == port.index])
 
         for address in port.ipv4.network.hosts():
-            if address not in not_available_addresses:
+            if address not in unavailable_addresses:
                 return address
 
         return None
@@ -275,10 +275,10 @@ class DHCPManager:
         return port.index, bootp.chaddr[:6]
 
     def get_settings(self) -> tuple[DHCPAllocationType, int, int]:
-        return self._allocation_type, self._offer_timeout, self._lease_time
+        return self._allocation_mode, self._offer_timeout, self._lease_time
 
-    def set_settings(self, allocation_type: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
-        self._allocation_type = allocation_type
+    def set_settings(self, allocation_mode: DHCPAllocationType, offer_timeout: int, lease_time: int) -> None:
+        self._allocation_mode = allocation_mode
         self._offer_timeout = offer_timeout
         self._lease_time = lease_time
 
@@ -306,6 +306,3 @@ class DHCPManager:
 
     def remove_manual_binding(self, client_mac: bytes) -> None:
         self._manual_bindings.pop(client_mac, None)
-
-    def clear_occupied_addresses(self) -> None:
-        self._occupied_addresses.clear()
